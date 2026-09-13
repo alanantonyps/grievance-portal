@@ -1,0 +1,9 @@
+# Exclude config files with DB passwords
+config.php
+db.php
+
+# Exclude database dumps
+*.sql
+
+# Exclude uploaded profile images
+uploads/
