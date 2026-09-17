@@ -205,8 +205,8 @@ $navCards = [
     ['title' => 'Settings',          'icon' => 'settings',       'href' => 'settings.php'],
     ['title' => 'Members',           'icon' => 'users',          'href' => 'members.php'],
     ['title' => 'Grievance',         'icon' => 'clipboard-list', 'href' => 'grievances.php'],
-    ['title' => 'Grievance Reports', 'icon' => 'bar-chart-3',    'href' => 'reports.php'],
-    ['title' => 'Mail Log',          'icon' => 'mail',           'href' => 'mail-log.php'],
+    ['title' => 'Grievance Reports', 'icon' => 'bar-chart-3',    'href' => 'grievance_report.php'],
+    ['title' => 'Mail Log',          'icon' => 'mail',           'href' => 'mail_log.php'],
 ];
 
 // ---------------------------------------------------------------------------
@@ -518,7 +518,7 @@ function e(?string $v): string
 
         <!-- ============ GRIEVANCE SUMMARY CALLOUT ============ -->
         <div class="flex justify-center">
-          <a href="reports.php"
+          <a href="summary_details.php"
              class="group relative flex items-center space-x-5 bg-white rounded-3xl shadow-lg border border-slate-100 p-5 pr-8 hover:shadow-2xl hover:scale-[1.03] transition-all duration-300">
 
             <div class="relative w-20 h-20 md:w-24 md:h-24 rounded-2xl bg-gradient-to-br from-purple-100 to-pink-100 flex items-center justify-center flex-shrink-0 overflow-hidden">
