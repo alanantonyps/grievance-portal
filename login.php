@@ -14,6 +14,9 @@
  *
  * DB status ENUM values:
  *   Pending | Approved | Rejected | Terminated
+ *
+ * Registration is allowed only for:
+ *   STUDENT | PARENT | TEACHER | NON_TEACHING
  * ---------------------------------------------------------------------------
  */
 
@@ -30,15 +33,27 @@ ini_set('display_errors', '0');
 ini_set('display_startup_errors', '0');
 error_reporting(E_ALL);
 
-// If already logged in, redirect away from login page
+// ---------------------------------------------------------------------------
+// ROLE DASHBOARD MAP (single source of truth for redirection)
+// key   = DB role (UPPERCASE)
+// value = target dashboard path
+// ---------------------------------------------------------------------------
+$roleDashboardMap = [
+    'ADMIN'        => 'admin/dashboard.php',
+    'STUDENT'      => 'student/dashboard.php',
+    'PARENT'       => 'parent/dashboard.php',
+    'TEACHER'      => 'teacher/dashboard.php',
+    'NON_TEACHING' => 'non_teaching/dashboard.php',
+    'MANAGEMENT'   => 'management/dashboard.php',
+];
+
+// If already logged in, redirect away from login page to the correct dashboard
 if (!empty($_SESSION['user_id']) && !empty($_SESSION['role'])) {
-    if ($_SESSION['role'] === 'ADMIN') {
-        header('Location: admin/dashboard.php');
-        exit;
-    } else {
-        header('Location: dashboard.php');
-        exit;
-    }
+    $currentRole = strtoupper((string) $_SESSION['role']);
+    $targetPath  = $roleDashboardMap[$currentRole] ?? 'student/dashboard.php';
+
+    header('Location: ' . $targetPath);
+    exit;
 }
 
 // ---------------------------------------------------------------------------
@@ -76,93 +91,103 @@ if (!file_exists($dbFile)) {
 // 3. ROLE MAP
 //    key    = URL param (lowercase, used in login.php?role=xxx)
 //    value  = full configuration incl. DB role enum (UPPERCASE)
+//    'register_page' = the dedicated registration page for that role
 // ---------------------------------------------------------------------------
 $roleConfig = [
     'admin' => [
-        'db_role'     => 'ADMIN',
-        'title'       => 'Administrator Portal',
-        'subtitle'    => 'Core Control & System Governance',
-        'icon'        => 'shield-check',
-        'placeholder' => 'Enter your Admin Username',
-        'label'       => 'Admin Username',
-        'notice'      => 'System Administrator Access Only',
-        'image'       => 'https://images.unsplash.com/photo-1551836022-d5d88e9218df?auto=format&fit=crop&w=800&q=80',
-        'imageTitle'  => 'System Control Center',
-        'imageDesc'   => 'System Configuration, User Management & Analytics',
-        'supportMail' => 'admin.support@rajagiri.edu',
-        'supportTag'  => 'Tech Support',
+        'db_role'       => 'ADMIN',
+        'title'         => 'Administrator Portal',
+        'subtitle'      => 'Core Control & System Governance',
+        'icon'          => 'shield-check',
+        'placeholder'   => 'Enter your Admin Username',
+        'label'         => 'Admin Username',
+        'notice'        => 'System Administrator Access Only',
+        'image'         => 'https://images.unsplash.com/photo-1551836022-d5d88e9218df?auto=format&fit=crop&w=800&q=80',
+        'imageTitle'    => 'System Control Center',
+        'imageDesc'     => 'System Configuration, User Management & Analytics',
+        'supportMail'   => 'admin.support@rajagiri.edu',
+        'supportTag'    => 'Tech Support',
+        'register_page' => null, // Admin cannot self-register
     ],
     'student' => [
-        'db_role'     => 'STUDENT',
-        'title'       => 'Student Portal',
-        'subtitle'    => 'Secure access to your grievance dashboard',
-        'icon'        => 'graduation-cap',
-        'placeholder' => 'Enter your Student Username',
-        'label'       => 'Student Username',
-        'notice'      => 'Enrolled Students Only',
-        'image'       => 'https://images.unsplash.com/photo-1523050854058-8df90110c9f1?auto=format&fit=crop&w=800&q=80',
-        'imageTitle'  => 'Student Portal',
-        'imageDesc'   => 'Your gateway to fair and transparent grievance resolution',
-        'supportMail' => 'student.grievance@rajigarircss.edu',
-        'supportTag'  => 'Helpdesk Email',
+        'db_role'       => 'STUDENT',
+        'title'         => 'Student Portal',
+        'subtitle'      => 'Secure access to your grievance dashboard',
+        'icon'          => 'graduation-cap',
+        'placeholder'   => 'Enter your Student Username',
+        'label'         => 'Student Username',
+        'notice'        => 'Enrolled Students Only',
+        'image'         => 'https://images.unsplash.com/photo-1523050854058-8df90110c9f1?auto=format&fit=crop&w=800&q=80',
+        'imageTitle'    => 'Student Portal',
+        'imageDesc'     => 'Your gateway to fair and transparent grievance resolution',
+        'supportMail'   => 'student.grievance@rajigarircss.edu',
+        'supportTag'    => 'Helpdesk Email',
+        'register_page' => 'student_register.php',
     ],
     'parent' => [
-        'db_role'     => 'PARENT',
-        'title'       => 'Parent Portal',
-        'subtitle'    => "Monitor Your Ward's Grievances",
-        'icon'        => 'users',
-        'placeholder' => 'Enter your Parent Username',
-        'label'       => 'Parent Username',
-        'notice'      => 'For Registered Parents & Guardians',
-        'image'       => 'https://images.unsplash.com/photo-1523240795612-9a054b0db644?auto=format&fit=crop&w=800&q=80',
-        'imageTitle'  => 'Parent Portal',
-        'imageDesc'   => "Stay connected with your ward's academic journey",
-        'supportMail' => 'parent.help@rajigarircss.edu',
-        'supportTag'  => 'Support Email',
+        'db_role'       => 'PARENT',
+        'title'         => 'Parent Portal',
+        'subtitle'      => "Monitor Your Ward's Grievances",
+        'icon'          => 'users',
+        'placeholder'   => 'Enter your Parent Username',
+        'label'         => 'Parent Username',
+        'notice'        => 'For Registered Parents & Guardians',
+        'image'         => 'https://images.unsplash.com/photo-1523240795612-9a054b0db644?auto=format&fit=crop&w=800&q=80',
+        'imageTitle'    => 'Parent Portal',
+        'imageDesc'     => "Stay connected with your ward's academic journey",
+        'supportMail'   => 'parent.help@rajigarircss.edu',
+        'supportTag'    => 'Support Email',
+        'register_page' => 'parent_register.php',
     ],
     'teacher' => [
-        'db_role'     => 'TEACHER',
-        'title'       => 'Teacher Portal',
-        'subtitle'    => 'Teaching Staff Access',
-        'icon'        => 'briefcase',
-        'placeholder' => 'Enter your Teacher Username',
-        'label'       => 'Teacher Username',
-        'notice'      => 'Verified Teaching Staff Only',
-        'image'       => 'https://images.unsplash.com/photo-1524178232363-1fb2b075b655?auto=format&fit=crop&w=800&q=80',
-        'imageTitle'  => 'Teacher Portal',
-        'imageDesc'   => 'Dedicated portal for teaching staff members',
-        'supportMail' => 'staff.help@rajagiri.edu',
-        'supportTag'  => 'Support Email',
+        'db_role'       => 'TEACHER',
+        'title'         => 'Teacher Portal',
+        'subtitle'      => 'Teaching Staff Access',
+        'icon'          => 'briefcase',
+        'placeholder'   => 'Enter your Teacher Username',
+        'label'         => 'Teacher Username',
+        'notice'        => 'Verified Teaching Staff Only',
+        'image'         => 'https://images.unsplash.com/photo-1524178232363-1fb2b075b655?auto=format&fit=crop&w=800&q=80',
+        'imageTitle'    => 'Teacher Portal',
+        'imageDesc'     => 'Dedicated portal for teaching staff members',
+        'supportMail'   => 'staff.help@rajagiri.edu',
+        'supportTag'    => 'Support Email',
+        'register_page' => 'teacher_register.php',
     ],
     'non_teaching' => [
-        'db_role'     => 'NON_TEACHING',
-        'title'       => 'Non-Teaching Staff Portal',
-        'subtitle'    => 'Administrative & Support Staff Access',
-        'icon'        => 'briefcase',
-        'placeholder' => 'Enter your Staff Username',
-        'label'       => 'Staff Username',
-        'notice'      => 'Verified Non-Teaching Staff Only',
-        'image'       => 'https://images.unsplash.com/photo-1521737604893-d14cc237f11d?auto=format&fit=crop&w=800&q=80',
-        'imageTitle'  => 'Non-Teaching Staff Portal',
-        'imageDesc'   => 'Dedicated portal for administrative and support staff',
-        'supportMail' => 'staff.help@rajagiri.edu',
-        'supportTag'  => 'Support Email',
+        'db_role'       => 'NON_TEACHING',
+        'title'         => 'Non-Teaching Staff Portal',
+        'subtitle'      => 'Administrative & Support Staff Access',
+        'icon'          => 'briefcase',
+        'placeholder'   => 'Enter your Staff Username',
+        'label'         => 'Staff Username',
+        'notice'        => 'Verified Non-Teaching Staff Only',
+        'image'         => 'https://images.unsplash.com/photo-1521737604893-d14cc237f11d?auto=format&fit=crop&w=800&q=80',
+        'imageTitle'    => 'Non-Teaching Staff Portal',
+        'imageDesc'     => 'Dedicated portal for administrative and support staff',
+        'supportMail'   => 'staff.help@rajagiri.edu',
+        'supportTag'    => 'Support Email',
+        'register_page' => 'non_teaching_register.php',
     ],
     'management' => [
-        'db_role'     => 'MANAGEMENT',
-        'title'       => 'Management & Grievance Portal',
-        'subtitle'    => 'Committee Oversight & Resolution Management',
-        'icon'        => 'layers',
-        'placeholder' => 'Enter your Management Username',
-        'label'       => 'Management Username',
-        'notice'      => 'Authorized Committee Members Only',
-        'image'       => 'https://images.unsplash.com/photo-1517245386807-bb43f82c33c4?auto=format&fit=crop&w=800&q=80',
-        'imageTitle'  => 'Management & Grievance Cell',
-        'imageDesc'   => 'Redressal Committee Oversight & Escalation Management',
-        'supportMail' => 'grievance.committee@rajagiri.edu',
-        'supportTag'  => 'Committee Helpdesk',
+        'db_role'       => 'MANAGEMENT',
+        'title'         => 'Management & Grievance Portal',
+        'subtitle'      => 'Committee Oversight & Resolution Management',
+        'icon'          => 'layers',
+        'placeholder'   => 'Enter your Management Username',
+        'label'         => 'Management Username',
+        'notice'        => 'Authorized Committee Members Only',
+        'image'         => 'https://images.unsplash.com/photo-1517245386807-bb43f82c33c4?auto=format&fit=crop&w=800&q=80',
+        'imageTitle'    => 'Management & Grievance Cell',
+        'imageDesc'     => 'Redressal Committee Oversight & Escalation Management',
+        'supportMail'   => 'grievance.committee@rajagiri.edu',
+        'supportTag'    => 'Committee Helpdesk',
+        'register_page' => null, // Management cannot self-register
     ],
 ];
+
+// Roles allowed to register (by URL key)
+$registrationAllowedRoles = ['student', 'parent', 'teacher', 'non_teaching'];
 
 // ---------------------------------------------------------------------------
 // 4. RESOLVE ROLE FROM QUERY STRING
@@ -172,6 +197,9 @@ if (!array_key_exists($roleKey, $roleConfig)) {
     $roleKey = 'student';
 }
 $role = $roleConfig[$roleKey];
+
+// Whether this role can register
+$canRegister = in_array($roleKey, $registrationAllowedRoles, true);
 
 // ---------------------------------------------------------------------------
 // 5. HANDLE POST SUBMISSION
@@ -198,6 +226,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $roleKey = $_POST['role'];
     }
     $role = $roleConfig[$roleKey];
+    $canRegister = in_array($roleKey, $registrationAllowedRoles, true);
 
     // IMPORTANT: Convert to uppercase to match DB ENUM ('ADMIN', 'STUDENT', ...)
     $dbRole = strtoupper((string) $role['db_role']);
@@ -219,9 +248,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $errors[] = $dbError ?: 'Database is unavailable. Please try again later.';
         } else {
             try {
-                // -------------------------------------------------------------
-                // Prepared statement — only valid columns from your schema
-                // -------------------------------------------------------------
                 $sql = "SELECT id, username, password, role, status
                         FROM users
                         WHERE username = ?
@@ -238,7 +264,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $result = $stmt->get_result();
 
                 if ($result === false || $result->num_rows === 0) {
-                    // No user found
                     $errors[] = 'Invalid username or password.';
                 } else {
                     $user = $result->fetch_assoc();
@@ -246,7 +271,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     // Normalize DB values
                     $dbUserRole     = strtoupper((string) ($user['role']   ?? ''));
                     $dbUserStatus   = ucfirst(strtolower((string) ($user['status'] ?? '')));
-                    // → "Pending" | "Approved" | "Rejected" | "Terminated"
 
                     // ---- Role match check ----
                     if ($dbUserRole !== $dbRole) {
@@ -262,24 +286,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     }
                     // ---- SUCCESS ----
                     else {
-                        // Prevent session fixation
                         session_regenerate_id(true);
 
                         $_SESSION['user_id']    = (int) $user['id'];
                         $_SESSION['username']   = $user['username'];
-                        $_SESSION['role']       = $dbUserRole;   // 'ADMIN' | 'STUDENT' | ...
+                        $_SESSION['role']       = $dbUserRole;
                         $_SESSION['logged_in']  = true;
                         $_SESSION['login_time'] = time();
 
-                        // ---- Dynamic redirect by role ----
                         $stmt->close();
                         $conn->close();
 
-                        if ($dbUserRole === 'ADMIN') {
-                            header('Location: admin/dashboard.php');
-                        } else {
-                            header('Location: dashboard.php');
-                        }
+                        // ---- Redirect to role-specific dashboard ----
+                        $targetPath = $roleDashboardMap[$dbUserRole] ?? 'student/dashboard.php';
+
+                        header('Location: ' . $targetPath);
                         exit;
                     }
                 }
@@ -516,6 +537,45 @@ function e(?string $v): string
                 </div>
               </button>
             </form>
+
+            <!-- ============================================================
+                 CREATE ACCOUNT SECTION (Dynamic — only for eligible roles)
+                 Uses the dedicated register page per role.
+                 ============================================================ -->
+            <?php if ($canRegister && !empty($role['register_page'])): ?>
+              <div class="mt-6 pt-6 border-t border-slate-100">
+                <div class="text-center">
+                  <p class="text-sm text-slate-500 mb-3">
+                    Don't have an account yet?
+                  </p>
+
+                  <a href="<?= e($role['register_page']) ?>?role=<?= e($roleKey) ?>"
+                     class="group/register relative inline-flex w-full items-center justify-center gap-2 px-5 py-3 rounded-xl
+                            bg-white hover:bg-gradient-to-r hover:from-[#8B5FBF] hover:via-[#B14FB8] hover:to-[#F45D9E]
+                            border-2 border-[#4A154B]/20 hover:border-transparent
+                            text-[#4A154B] hover:text-white
+                            font-semibold shadow-sm hover:shadow-lg hover:shadow-pink-500/30
+                            transition-all duration-300 hover:-translate-y-0.5 active:scale-[0.98]">
+
+                    <span class="inline-flex items-center justify-center w-7 h-7 rounded-full
+                                 bg-[#4A154B]/10 group-hover/register:bg-white/20
+                                 transition-colors duration-300">
+                      <i data-lucide="user-plus" class="w-4 h-4"></i>
+                    </span>
+
+                    <span>Create an account</span>
+
+                    <i data-lucide="arrow-right"
+                       class="w-4 h-4 transition-transform duration-300 group-hover/register:translate-x-1"></i>
+                  </a>
+
+                  <p class="text-[11px] text-slate-400 mt-3 flex items-center justify-center gap-1">
+                    <i data-lucide="shield-check" class="w-3 h-3"></i>
+                    <span>Quick registration — approval within 24 hours</span>
+                  </p>
+                </div>
+              </div>
+            <?php endif; ?>
 
             <!-- Notice -->
             <div class="mt-5 text-center">

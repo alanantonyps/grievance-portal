@@ -10,7 +10,8 @@
  *   • Live search + entries-per-page dropdown
  *   • Server-side pagination (Previous / Next)
  *   • Dynamic status badge colours
- *   • View / Process action buttons + Reopen indicator
+ *   • Eye icon  → opens full "View Grievance" modal (in-page)
+ *   • List icon → opens "Action Summary" modal (Date + Attendee)
  *   • Custom themed logout confirmation modal
  *   • Flash messages auto-dismiss after 3 seconds
  * ---------------------------------------------------------------------------
@@ -150,9 +151,9 @@ if (!empty($_SESSION['flash_error'])) {
 // ---------------------------------------------------------------------------
 // 7. QUERY PARAMS — search, pagination, per-page
 // ---------------------------------------------------------------------------
-$search       = trim((string) ($_GET['q']       ?? ''));
-$entries      = (int) ($_GET['entries']          ?? 10);
-$page         = (int) ($_GET['page']             ?? 1);
+$search  = trim((string) ($_GET['q']       ?? ''));
+$entries = (int) ($_GET['entries']          ?? 10);
+$page    = (int) ($_GET['page']             ?? 1);
 
 if (!in_array($entries, [10, 25, 50, 100], true)) {
     $entries = 10;
@@ -163,6 +164,7 @@ $offset = ($page - 1) * $entries;
 
 // ---------------------------------------------------------------------------
 // 8. FETCH GRIEVANCES (with joins & complainant name resolution)
+//    Includes full detail columns needed by the View modal.
 // ---------------------------------------------------------------------------
 $grievances = [];
 $totalRows  = 0;
@@ -219,15 +221,22 @@ if ($conn instanceof mysqli) {
             $offset = ($page - 1) * $entries;
         }
 
-        // ---- Data query ----
+        // ---- Data query (with all details for View modal) ----
         $dataSql = "SELECT  g.id,
                             g.grievance_number,
                             g.subject,
+                            g.description,
                             g.status,
+                            g.reply_details,
+                            g.feedback_details,
                             g.created_at,
+                            g.updated_at,
+                            g.attended_by,
                             gt.type_name,
                             u.role AS complainant_role,
-                            COALESCE(s.name, p.name, cm.name, ap.name, u.username) AS complainant_name
+                            COALESCE(s.name, p.name, cm.name, ap.name, u.username) AS complainant_name,
+                            COALESCE(s.email, p.email, cm.email, ap.email) AS complainant_email,
+                            att_cm.name AS attendee_name
                     FROM grievances g
                     LEFT JOIN grievance_types gt ON g.grievance_type_id   = gt.id
                     LEFT JOIN users u            ON g.complainant_user_id = u.id
@@ -235,12 +244,13 @@ if ($conn instanceof mysqli) {
                     LEFT JOIN parents p          ON u.id = p.user_id
                     LEFT JOIN cell_members cm    ON u.id = cm.user_id
                     LEFT JOIN admin_profiles ap  ON u.id = ap.user_id
+                    LEFT JOIN cell_members att_cm ON g.attended_by = att_cm.id
                     $whereSql
                     ORDER BY g.id DESC
                     LIMIT ? OFFSET ?";
 
-        $dataParams = $params;
-        $dataTypes  = $types . 'ii';
+        $dataParams   = $params;
+        $dataTypes    = $types . 'ii';
         $dataParams[] = $entries;
         $dataParams[] = $offset;
 
@@ -608,21 +618,36 @@ function statusBadgeClass(string $status): string
 
                     <?php foreach ($grievances as $index => $gr): ?>
                       <?php
-                        $grId       = (int) $gr['id'];
-                        $grNumber   = (string) ($gr['grievance_number']   ?? '');
-                        $grType     = (string) ($gr['type_name']          ?? 'N/A');
-                        $grName     = (string) ($gr['complainant_name']   ?? 'N/A');
-                        $grDate     = (string) ($gr['created_at']         ?? '');
-                        $grSubject  = (string) ($gr['subject']            ?? '');
-                        $grStatus   = (string) ($gr['status']             ?? 'Pending');
-                        $statusCls  = statusBadgeClass($grStatus);
+                        $grId         = (int) $gr['id'];
+                        $grNumber     = (string) ($gr['grievance_number']  ?? '');
+                        $grType       = (string) ($gr['type_name']         ?? 'N/A');
+                        $grName       = (string) ($gr['complainant_name']  ?? 'N/A');
+                        $grEmail      = (string) ($gr['complainant_email'] ?? '');
+                        $grRole       = (string) ($gr['complainant_role']  ?? '');
+                        $grDate       = (string) ($gr['created_at']        ?? '');
+                        $grUpdated    = (string) ($gr['updated_at']        ?? '');
+                        $grSubject    = (string) ($gr['subject']           ?? '');
+                        $grDesc       = (string) ($gr['description']       ?? '');
+                        $grReply      = (string) ($gr['reply_details']     ?? '');
+                        $grFeedback   = (string) ($gr['feedback_details']  ?? '');
+                        $grStatus     = (string) ($gr['status']            ?? 'Pending');
+                        $grAttendee   = (string) ($gr['attendee_name']     ?? '');
+                        $statusCls    = statusBadgeClass($grStatus);
 
-                        // Format date as YYYY-MM-DD
+                        // Format dates
                         $formattedDate = '—';
                         if ($grDate !== '') {
                             $ts = strtotime($grDate);
                             if ($ts !== false) {
                                 $formattedDate = date('Y-m-d', $ts);
+                            }
+                        }
+
+                        $formattedUpdated = '—';
+                        if ($grUpdated !== '') {
+                            $ts2 = strtotime($grUpdated);
+                            if ($ts2 !== false) {
+                                $formattedUpdated = date('d M Y, h:i A', $ts2);
                             }
                         }
 
@@ -655,23 +680,44 @@ function statusBadgeClass(string $status): string
                         <td class="px-6 py-4 whitespace-nowrap">
                           <div class="flex items-center justify-center gap-2">
 
-                            <!-- View -->
-                            <a href="view_grievance.php?id=<?= $grId ?>"
-                               title="View grievance"
-                               class="w-9 h-9 rounded-full bg-purple-50 hover:bg-[#4A154B]
-                                      flex items-center justify-center text-[#4A154B] hover:text-white
-                                      transition-all duration-200 hover:scale-110">
+                            <!-- View (Eye) — opens View Grievance modal -->
+                            <button type="button"
+                                    title="View grievance"
+                                    onclick='openViewGrievanceModal(
+                                        <?= json_encode($grNumber) ?>,
+                                        <?= json_encode($grType) ?>,
+                                        <?= json_encode($grName) ?>,
+                                        <?= json_encode($grEmail) ?>,
+                                        <?= json_encode($grRole) ?>,
+                                        <?= json_encode($grSubject) ?>,
+                                        <?= json_encode($grDesc) ?>,
+                                        <?= json_encode($grStatus) ?>,
+                                        <?= json_encode($grReply) ?>,
+                                        <?= json_encode($grFeedback) ?>,
+                                        <?= json_encode($formattedDate) ?>,
+                                        <?= json_encode($formattedUpdated) ?>,
+                                        <?= json_encode($grAttendee) ?>
+                                    )'
+                                    class="w-9 h-9 rounded-full bg-purple-50 hover:bg-[#4A154B]
+                                           flex items-center justify-center text-[#4A154B] hover:text-white
+                                           transition-all duration-200 hover:scale-110">
                               <i data-lucide="eye" class="w-4 h-4"></i>
-                            </a>
+                            </button>
 
-                            <!-- Process / History -->
-                            <a href="process_grievance.php?id=<?= $grId ?>"
-                               title="Process grievance"
-                               class="w-9 h-9 rounded-full bg-purple-50 hover:bg-[#4A154B]
-                                      flex items-center justify-center text-[#4A154B] hover:text-white
-                                      transition-all duration-200 hover:scale-110">
+                            <!-- Action Summary (Three lines / list) -->
+                            <button type="button"
+                                    title="Action summary"
+                                    onclick='openActionSummary(
+                                        <?= json_encode($grNumber) ?>,
+                                        <?= json_encode($grSubject) ?>,
+                                        <?= json_encode($formattedDate) ?>,
+                                        <?= json_encode($grAttendee !== '' ? $grAttendee : 'No Data') ?>
+                                    )'
+                                    class="w-9 h-9 rounded-full bg-purple-50 hover:bg-[#4A154B]
+                                           flex items-center justify-center text-[#4A154B] hover:text-white
+                                           transition-all duration-200 hover:scale-110">
                               <i data-lucide="list" class="w-4 h-4"></i>
-                            </a>
+                            </button>
 
                           </div>
                         </td>
@@ -715,7 +761,6 @@ function statusBadgeClass(string $status): string
                 <div class="flex items-center space-x-2">
 
                   <?php
-                    // Preserve search + entries in pagination links
                     $qsBase = 'grievance_details.php?entries=' . $entries;
                     if ($search !== '') {
                         $qsBase .= '&q=' . urlencode($search);
@@ -807,6 +852,145 @@ function statusBadgeClass(string $status): string
           </div>
         </div>
       </footer>
+
+    </div>
+  </div>
+
+  <!-- ============================================================= -->
+  <!-- VIEW GRIEVANCE MODAL (opened by the eye icon)                 -->
+  <!-- ============================================================= -->
+  <div id="viewGrievanceModal" class="hidden fixed inset-0 z-[65] flex items-center justify-center p-4">
+    <div class="absolute inset-0 bg-black/40 backdrop-blur-sm" onclick="closeViewGrievanceModal()"></div>
+
+    <div class="relative w-full max-w-3xl bg-white rounded-2xl shadow-2xl animate-modal-in
+                overflow-hidden max-h-[92vh] flex flex-col">
+
+      <div class="h-1.5 w-full bg-gradient-to-r from-[#6A2C8A] via-[#8B1E7E] to-[#C43A7A]"></div>
+
+      <div class="flex items-center justify-between px-6 py-4 border-b border-slate-100">
+        <h3 class="text-lg md:text-xl font-bold text-slate-800">Grievance Details</h3>
+        <button type="button" onclick="closeViewGrievanceModal()"
+                class="w-8 h-8 rounded-lg hover:bg-slate-100 flex items-center justify-center text-slate-500 transition-colors">
+          <i data-lucide="x" class="w-5 h-5"></i>
+        </button>
+      </div>
+
+      <div class="p-6 overflow-y-auto flex-1 space-y-5">
+
+        <!-- Header block: number + subject + status -->
+        <div class="flex items-start space-x-4 pb-4 border-b border-slate-100">
+          <div class="w-14 h-14 rounded-full bg-gradient-to-br from-[#4A154B] to-[#8B1E7E]
+                      flex items-center justify-center text-white shadow-md flex-shrink-0">
+            <i data-lucide="file-text" class="w-7 h-7"></i>
+          </div>
+          <div class="min-w-0 flex-1">
+            <p id="vgNumber" class="text-sm font-bold text-[#4A154B] break-words">—</p>
+            <p id="vgSubject" class="text-base font-bold text-slate-800 break-words mt-0.5">—</p>
+            <div class="mt-2 flex flex-wrap items-center gap-2">
+              <span id="vgStatus"></span>
+              <span class="text-xs text-slate-500">·</span>
+              <span class="text-xs text-slate-500" id="vgDate">—</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Meta grid -->
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div class="bg-slate-50 rounded-xl p-3 border border-slate-100">
+            <p class="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1">Grievance Type</p>
+            <p id="vgType" class="text-sm font-semibold text-slate-800 break-words">—</p>
+          </div>
+          <div class="bg-slate-50 rounded-xl p-3 border border-slate-100">
+            <p class="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1">Complainant</p>
+            <p id="vgComplainant" class="text-sm font-semibold text-slate-800 break-words">—</p>
+            <p id="vgComplainantMeta" class="text-xs text-slate-500 break-all mt-0.5">—</p>
+          </div>
+          <div class="bg-slate-50 rounded-xl p-3 border border-slate-100">
+            <p class="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1">Submitted On</p>
+            <p id="vgSubmitted" class="text-sm font-semibold text-slate-800">—</p>
+          </div>
+          <div class="bg-slate-50 rounded-xl p-3 border border-slate-100">
+            <p class="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1">Last Updated</p>
+            <p id="vgUpdated" class="text-sm font-semibold text-slate-800">—</p>
+          </div>
+          <div class="bg-slate-50 rounded-xl p-3 border border-slate-100 sm:col-span-2">
+            <p class="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1">Attendee</p>
+            <p id="vgAttendee" class="text-sm font-semibold text-slate-800 break-words">No Data</p>
+          </div>
+        </div>
+
+        <!-- Description -->
+        <div>
+          <p class="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1.5">Description</p>
+          <div class="bg-slate-50 rounded-xl p-4 border border-slate-100">
+            <p id="vgDescription" class="text-sm text-slate-700 leading-relaxed whitespace-pre-line break-words">—</p>
+          </div>
+        </div>
+
+        <!-- Reply -->
+        <div>
+          <p class="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1.5">Reply / Response</p>
+          <div class="bg-emerald-50 rounded-xl p-4 border border-emerald-100">
+            <p id="vgReply" class="text-sm text-emerald-800 leading-relaxed whitespace-pre-line break-words">—</p>
+          </div>
+        </div>
+
+        <!-- Feedback -->
+        <div>
+          <p class="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1.5">Feedback</p>
+          <div class="bg-amber-50 rounded-xl p-4 border border-amber-100">
+            <p id="vgFeedback" class="text-sm text-amber-800 leading-relaxed whitespace-pre-line break-words">—</p>
+          </div>
+        </div>
+
+      </div>
+
+      <div class="px-6 py-4 bg-slate-50 border-t border-slate-100 flex justify-end">
+        <button type="button" onclick="closeViewGrievanceModal()"
+                class="px-5 py-2.5 rounded-xl font-semibold text-slate-700
+                       bg-white hover:bg-slate-100 border border-slate-200
+                       transition-all duration-200 active:scale-95">
+          Close
+        </button>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ============================================================= -->
+  <!-- ACTION SUMMARY MODAL (opened by the list icon)                -->
+  <!-- ============================================================= -->
+  <div id="actionSummaryModal" class="hidden fixed inset-0 z-[65] flex items-start justify-center p-4 pt-20">
+    <div class="absolute inset-0 bg-black/30 backdrop-blur-sm" onclick="closeActionSummary()"></div>
+
+    <div class="relative w-full max-w-2xl bg-white rounded-xl shadow-2xl animate-modal-in overflow-hidden">
+
+      <!-- Title banner -->
+      <div class="bg-pink-100 text-pink-900 px-5 py-2.5 border-b border-pink-200">
+        <p id="asTitle" class="text-sm font-semibold truncate">—</p>
+      </div>
+
+      <div class="flex items-center justify-between px-6 pt-5 pb-3">
+        <h3 class="text-xl font-bold text-slate-800">Action Summary</h3>
+        <button type="button" onclick="closeActionSummary()"
+                class="w-8 h-8 rounded-lg hover:bg-slate-100 flex items-center justify-center text-slate-500 transition-colors">
+          <i data-lucide="x" class="w-5 h-5"></i>
+        </button>
+      </div>
+
+      <div class="px-6 pb-6">
+        <div class="border border-slate-200 rounded-lg overflow-hidden">
+          <div class="flex items-center justify-between px-4 py-4 border-b border-slate-200 bg-slate-50/40">
+            <span class="text-sm font-medium text-slate-700">Date</span>
+            <span id="asDate" class="text-sm font-medium text-slate-800">No Date</span>
+          </div>
+
+          <div class="flex items-center justify-between px-4 py-4 bg-white">
+            <span class="text-sm font-medium text-slate-700">Attendee</span>
+            <span id="asAttendee" class="text-sm font-medium text-slate-800">No Data</span>
+          </div>
+        </div>
+      </div>
 
     </div>
   </div>
@@ -929,7 +1113,99 @@ function statusBadgeClass(string $status): string
       });
     })();
 
-    // ---- Logout Confirmation Modal ----
+    // ============================================================
+    // VIEW GRIEVANCE MODAL (triggered by the eye icon)
+    // ============================================================
+    const viewGrievanceModal = document.getElementById('viewGrievanceModal');
+
+    function statusBadgeHtml(status) {
+      const s = (status || '').trim();
+      const map = {
+        'Pending':     'bg-amber-100 text-amber-800 border-amber-200',
+        'In Progress': 'bg-sky-100 text-sky-800 border-sky-200',
+        'Disposed':    'bg-emerald-100 text-emerald-800 border-emerald-200',
+        'Closed':      'bg-slate-100 text-slate-700 border-slate-200',
+        'Reopened':    'bg-pink-100 text-pink-800 border-pink-200'
+      };
+      const cls = map[s] || 'bg-slate-100 text-slate-700 border-slate-200';
+      return '<span class="inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider border ' + cls + '">' + s + '</span>';
+    }
+
+    function openViewGrievanceModal(number, type, name, email, role, subject, description,
+                                    status, reply, feedback, date, updated, attendee) {
+      if (!viewGrievanceModal) return;
+
+      document.getElementById('vgNumber').textContent    = number || '—';
+      document.getElementById('vgSubject').textContent   = subject || '—';
+      document.getElementById('vgStatus').innerHTML      = statusBadgeHtml(status);
+      document.getElementById('vgDate').textContent      = date || '—';
+      document.getElementById('vgType').textContent      = type || '—';
+
+      // Complainant block
+      document.getElementById('vgComplainant').textContent = name || '—';
+      const metaParts = [];
+      if (role)  metaParts.push(role);
+      if (email) metaParts.push(email);
+      document.getElementById('vgComplainantMeta').textContent = metaParts.length ? metaParts.join(' · ') : '—';
+
+      document.getElementById('vgSubmitted').textContent = date || '—';
+      document.getElementById('vgUpdated').textContent   = updated || '—';
+      document.getElementById('vgAttendee').textContent  = (attendee && attendee.trim() !== '') ? attendee : 'No Data';
+
+      document.getElementById('vgDescription').textContent =
+        (description && description.trim() !== '') ? description : 'No description provided.';
+      document.getElementById('vgReply').textContent =
+        (reply && reply.trim() !== '') ? reply : 'No reply yet from the committee.';
+      document.getElementById('vgFeedback').textContent =
+        (feedback && feedback.trim() !== '') ? feedback : 'No feedback recorded.';
+
+      viewGrievanceModal.classList.remove('hidden');
+      document.body.classList.add('overflow-hidden');
+
+      if (typeof lucide !== 'undefined') lucide.createIcons();
+    }
+
+    function closeViewGrievanceModal() {
+      if (!viewGrievanceModal) return;
+      viewGrievanceModal.classList.add('hidden');
+      document.body.classList.remove('overflow-hidden');
+    }
+
+    // ============================================================
+    // ACTION SUMMARY MODAL (triggered by the list icon)
+    // ============================================================
+    const actionSummaryModal = document.getElementById('actionSummaryModal');
+
+    function openActionSummary(grievanceNumber, subject, date, attendee) {
+      if (!actionSummaryModal) return;
+
+      const titleEl    = document.getElementById('asTitle');
+      const dateEl     = document.getElementById('asDate');
+      const attendeeEl = document.getElementById('asAttendee');
+
+      const bannerText = (subject && subject.trim() !== '')
+        ? grievanceNumber + ' | ' + subject
+        : grievanceNumber;
+      titleEl.textContent = bannerText || '—';
+
+      dateEl.textContent     = (date && date.trim() !== '') ? date : 'No Date';
+      attendeeEl.textContent = (attendee && attendee.trim() !== '') ? attendee : 'No Data';
+
+      actionSummaryModal.classList.remove('hidden');
+      document.body.classList.add('overflow-hidden');
+
+      if (typeof lucide !== 'undefined') lucide.createIcons();
+    }
+
+    function closeActionSummary() {
+      if (!actionSummaryModal) return;
+      actionSummaryModal.classList.add('hidden');
+      document.body.classList.remove('overflow-hidden');
+    }
+
+    // ============================================================
+    // LOGOUT CONFIRMATION MODAL
+    // ============================================================
     const logoutConfirmModal = document.getElementById('logoutConfirmModal');
     const logoutConfirmPanel = document.getElementById('logoutConfirmPanel');
     const confirmLogoutBtn   = document.getElementById('confirmLogoutBtn');
@@ -975,7 +1251,6 @@ function statusBadgeClass(string $status): string
       });
     })();
 
-    // Confirm button inside modal → go to logout URL
     if (confirmLogoutBtn) {
       confirmLogoutBtn.addEventListener('click', function () {
         confirmLogoutBtn.classList.add('opacity-50', 'pointer-events-none');
@@ -983,11 +1258,12 @@ function statusBadgeClass(string $status): string
       });
     }
 
-    // Escape key closes the modal
+    // ---- Escape key: close whichever modal is open ----
     document.addEventListener('keydown', function (e) {
-      if (e.key === 'Escape' && logoutConfirmModal && !logoutConfirmModal.classList.contains('hidden')) {
-        closeLogoutModal();
-      }
+      if (e.key !== 'Escape') return;
+      if (viewGrievanceModal && !viewGrievanceModal.classList.contains('hidden')) closeViewGrievanceModal();
+      if (actionSummaryModal && !actionSummaryModal.classList.contains('hidden')) closeActionSummary();
+      if (logoutConfirmModal && !logoutConfirmModal.classList.contains('hidden')) closeLogoutModal();
     });
 
     // ---- Entries dropdown: auto-submit the filter form ----
@@ -1008,13 +1284,11 @@ function statusBadgeClass(string $status): string
 
       let debounceTimer = null;
       searchInput.addEventListener('input', function () {
-        // Instant client-side filtering for the visible rows
         const term = this.value.toLowerCase().trim();
         tableBody.querySelectorAll('tr').forEach(function (row) {
           row.style.display = (term === '' || row.textContent.toLowerCase().indexOf(term) !== -1) ? '' : 'none';
         });
 
-        // Then trigger a server-side search to include matches outside the current page
         clearTimeout(debounceTimer);
         debounceTimer = setTimeout(function () {
           const form = document.getElementById('filterForm');

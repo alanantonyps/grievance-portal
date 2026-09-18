@@ -11,6 +11,7 @@
  *   • Dynamic dropdowns pulled from the live DB
  *   • Complainant name resolved by role (students / parents / cell_members / admin_profiles)
  *   • Attended-by resolved via cell_members
+ *   • Report table shown ONLY after the user clicks Submit
  *   • Print-only report section (@media print)
  *   • Themed logout confirmation modal
  * ---------------------------------------------------------------------------
@@ -186,18 +187,18 @@ if ($conn instanceof mysqli) {
 // ---------------------------------------------------------------------------
 // 7. PROCESS FILTERS (GET)
 // ---------------------------------------------------------------------------
-$today            = date('Y-m-d');
-$defaultFrom      = date('Y-m-d', strtotime('-30 days'));
+$today       = date('Y-m-d');
+$defaultFrom = date('Y-m-d', strtotime('-30 days'));
 
-$filterFrom       = trim((string) ($_GET['from']           ?? $defaultFrom));
-$filterTo         = trim((string) ($_GET['to']             ?? $today));
-$filterType       = (int) ($_GET['grievance_type_id']      ?? 0);
-$filterMember     = (int) ($_GET['grievance_member_id']    ?? 0);
-$filterCourse     = (int) ($_GET['course_id']              ?? 0);
-$filterClass      = (int) ($_GET['class_id']               ?? 0);
-$filterDepartment = (int) ($_GET['department_id']          ?? 0);
-$filterDesignation= (int) ($_GET['designation_id']         ?? 0);
-$filterStatus     = trim((string) ($_GET['status']         ?? ''));
+$filterFrom        = trim((string) ($_GET['from']                ?? $defaultFrom));
+$filterTo          = trim((string) ($_GET['to']                  ?? $today));
+$filterType        = (int) ($_GET['grievance_type_id']           ?? 0);
+$filterMember      = (int) ($_GET['grievance_member_id']         ?? 0);
+$filterCourse      = (int) ($_GET['course_id']                   ?? 0);
+$filterClass       = (int) ($_GET['class_id']                    ?? 0);
+$filterDepartment  = (int) ($_GET['department_id']               ?? 0);
+$filterDesignation = (int) ($_GET['designation_id']              ?? 0);
+$filterStatus      = trim((string) ($_GET['status']              ?? ''));
 
 $validStatuses = ['', 'Pending', 'In Progress', 'Disposed', 'Closed', 'Reopened'];
 if (!in_array($filterStatus, $validStatuses, true)) {
@@ -213,11 +214,18 @@ if (strtotime($filterFrom) > strtotime($filterTo)) {
 }
 
 // ---------------------------------------------------------------------------
-// 8. BUILD REPORT QUERY
+// 8. DETECT WHETHER THE FORM WAS SUBMITTED
+//    We only run the report query and render the table when the user
+//    explicitly submits the filter form (submit=1).
+// ---------------------------------------------------------------------------
+$isSubmitted = isset($_GET['submit']) && (string) $_GET['submit'] === '1';
+
+// ---------------------------------------------------------------------------
+// 9. BUILD REPORT QUERY (only when submitted)
 // ---------------------------------------------------------------------------
 $rows = [];
 
-if ($conn instanceof mysqli) {
+if ($isSubmitted && $conn instanceof mysqli) {
     try {
         $sql = "SELECT  g.id,
                         g.grievance_number,
@@ -225,11 +233,14 @@ if ($conn instanceof mysqli) {
                         g.description,
                         g.status,
                         g.created_at,
+                        g.updated_at,
                         g.reply_details,
                         g.feedback_details,
                         gt.type_name,
                         COALESCE(s.name, p.name, cm.name, ap.name, u.username) AS complainant_name,
-                        cm.attended_by_name
+                        COALESCE(s.email, p.email, cm.email, ap.email) AS complainant_email,
+                        u.role AS complainant_role,
+                        att_cm.name AS attended_by_name
                 FROM grievances g
                 LEFT JOIN grievance_types gt  ON g.grievance_type_id   = gt.id
                 LEFT JOIN users u             ON g.complainant_user_id = u.id
@@ -237,11 +248,7 @@ if ($conn instanceof mysqli) {
                 LEFT JOIN parents p           ON u.id = p.user_id
                 LEFT JOIN cell_members cm     ON u.id = cm.user_id
                 LEFT JOIN admin_profiles ap   ON u.id = ap.user_id
-                LEFT JOIN (
-                    SELECT  c.id AS attended_id,
-                            c.name AS attended_by_name
-                    FROM cell_members c
-                ) cm_att ON g.attended_by = cm_att.attended_id
+                LEFT JOIN cell_members att_cm ON g.attended_by = att_cm.id
                 WHERE DATE(g.created_at) BETWEEN ? AND ?";
 
         $params = [$filterFrom, $filterTo];
@@ -307,7 +314,7 @@ if ($conn instanceof mysqli) {
 }
 
 // ---------------------------------------------------------------------------
-// 9. LOOKUP HELPERS FOR FILTER SUMMARY
+// 10. LOOKUP HELPERS FOR FILTER SUMMARY
 // ---------------------------------------------------------------------------
 function findName(array $list, int $id, string $key): string
 {
@@ -392,13 +399,16 @@ function findName(array $list, int $id, string $key): string
       .report-table {
         width: 100%;
         border-collapse: collapse;
-        font-size: 11px;
+        font-size: 10px;
+        table-layout: fixed;
       }
       .report-table th,
       .report-table td {
         border: 1px solid #333;
-        padding: 4px 6px;
+        padding: 4px 5px;
         text-align: left;
+        word-wrap: break-word;
+        overflow-wrap: break-word;
       }
       .report-table th {
         background-color: #f3f3f3 !important;
@@ -581,14 +591,16 @@ function findName(array $list, int $id, string $key): string
               </nav>
             </div>
 
-            <button type="button"
-                    onclick="window.print();"
-                    title="Print Report"
-                    class="inline-flex items-center justify-center w-11 h-11 rounded-xl bg-[#4A154B] hover:bg-[#5A1B5C]
-                           text-white shadow-lg shadow-purple-500/30 hover:shadow-purple-500/50
-                           transition-all duration-300 hover:-translate-y-0.5 active:scale-95">
-              <i data-lucide="printer" class="w-5 h-5"></i>
-            </button>
+            <?php if ($isSubmitted): ?>
+              <button type="button"
+                      onclick="window.print();"
+                      title="Print Report"
+                      class="inline-flex items-center justify-center w-11 h-11 rounded-xl bg-[#4A154B] hover:bg-[#5A1B5C]
+                             text-white shadow-lg shadow-purple-500/30 hover:shadow-purple-500/50
+                             transition-all duration-300 hover:-translate-y-0.5 active:scale-95">
+                <i data-lucide="printer" class="w-5 h-5"></i>
+              </button>
+            <?php endif; ?>
 
           </div>
         </div>
@@ -599,7 +611,9 @@ function findName(array $list, int $id, string $key): string
 
             <form method="GET" action="complaint_report.php" class="space-y-5">
 
-              <!-- Row 1: From Date | To Date | Grievance Type -->
+              <!-- Hidden flag tells PHP the user explicitly submitted -->
+              <input type="hidden" name="submit" value="1" />
+
               <div class="grid grid-cols-1 md:grid-cols-3 gap-5">
                 <div class="space-y-2">
                   <label for="from" class="block text-sm font-semibold text-slate-700">From Date</label>
@@ -633,7 +647,6 @@ function findName(array $list, int $id, string $key): string
                 </div>
               </div>
 
-              <!-- Row 2: Grievance Member | Course | Department -->
               <div class="grid grid-cols-1 md:grid-cols-3 gap-5">
                 <div class="space-y-2">
                   <label for="grievance_member_id" class="block text-sm font-semibold text-slate-700">Grievance Member</label>
@@ -681,7 +694,6 @@ function findName(array $list, int $id, string $key): string
                 </div>
               </div>
 
-              <!-- Row 3: Class | Designation | Status -->
               <div class="grid grid-cols-1 md:grid-cols-3 gap-5">
                 <div class="space-y-2">
                   <label for="class_id" class="block text-sm font-semibold text-slate-700">Class</label>
@@ -729,7 +741,6 @@ function findName(array $list, int $id, string $key): string
                 </div>
               </div>
 
-              <!-- Submit Button -->
               <div class="flex justify-center pt-3">
                 <button type="submit"
                         class="px-10 py-3 rounded-xl
@@ -747,103 +758,172 @@ function findName(array $list, int $id, string $key): string
 
         <!-- ============================================================
              PRINTABLE REPORT SECTION
+             ONLY rendered when the user has submitted the form.
              ============================================================ -->
-        <div id="reportSection" class="max-w-6xl mx-auto animate-fade-in-up" style="animation-delay: 120ms;">
+        <?php if ($isSubmitted): ?>
+          <div id="reportSection" class="max-w-6xl mx-auto animate-fade-in-up" style="animation-delay: 120ms;">
 
-          <!-- Report Header -->
-          <div class="bg-white border border-slate-200 rounded-t-xl px-6 py-5">
-            <div class="flex items-center justify-between flex-wrap gap-4">
-              <div class="flex items-center gap-4">
-                <img src="../public/rcss-logo.png" alt="RCSS Logo" class="h-12 w-auto" />
-                <div>
-                  <p class="text-sm font-bold text-[#006837] uppercase tracking-wider">Rajagiri College of Social Sciences</p>
-                  <p class="text-xs text-slate-500">Grievance Redressal Portal</p>
+            <!-- Report Header -->
+            <div class="bg-white border border-slate-200 rounded-t-xl px-6 py-5">
+              <div class="flex items-center justify-between flex-wrap gap-4">
+                <div class="flex items-center gap-4">
+                  <img src="../public/rcss-logo.png" alt="RCSS Logo" class="h-12 w-auto" />
+                  <div>
+                    <p class="text-sm font-bold text-[#006837] uppercase tracking-wider">Rajagiri College of Social Sciences</p>
+                    <p class="text-xs text-slate-500">Grievance Redressal Portal</p>
+                  </div>
+                </div>
+                <div class="text-right">
+                  <p class="text-sm font-semibold text-slate-700">Date: <?= date('d-m-Y') ?></p>
                 </div>
               </div>
-              <div class="text-right">
-                <p class="text-sm font-semibold text-slate-700">Date: <?= date('d-m-Y') ?></p>
-              </div>
-            </div>
 
-            <h2 class="text-xl md:text-2xl font-bold text-slate-800 mt-5 tracking-tight">Complaint Report</h2>
+              <h2 class="text-xl md:text-2xl font-bold text-slate-800 mt-5 tracking-tight">Complaint Report</h2>
 
-            <div class="mt-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 text-xs text-slate-600">
-              <p>
-                <span class="font-semibold text-slate-700">Period:</span>
-                <?= e(date('d/m/Y', strtotime($filterFrom))) ?> – <?= e(date('d/m/Y', strtotime($filterTo))) ?>
-              </p>
-              <p>
-                <span class="font-semibold text-slate-700">Filters:</span>
-                Type: <?= e($filterType > 0 ? findName($grievanceTypes, $filterType, 'type_name') : 'All') ?>
-                · Member: <?= e($filterMember > 0 ? findName($cellMembers, $filterMember, 'name') : 'All') ?>
-                · Status: <?= e($filterStatus !== '' ? $filterStatus : 'All') ?>
-              </p>
-            </div>
-          </div>
-
-          <!-- Report Table -->
-          <div class="bg-white border-x border-b border-slate-200 rounded-b-xl overflow-hidden">
-            <div class="overflow-x-auto">
-              <table class="w-full report-table">
-                <thead>
-                  <tr class="bg-[#4A154B] text-white">
-                    <th class="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider">Sl.No.</th>
-                    <th class="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider">Name</th>
-                    <th class="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider">Date Of Posting</th>
-                    <th class="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider">Grievance Type</th>
-                    <th class="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider">Subject</th>
-                    <th class="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider">Description</th>
-                    <th class="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider">Status</th>
-                    <th class="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider">Attended by</th>
-                    <th class="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider">Reply Details</th>
-                    <th class="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider">Feedback Details</th>
-                  </tr>
-                </thead>
-                <tbody class="divide-y divide-slate-100 bg-white">
-
-                  <?php if (empty($rows)): ?>
-                    <tr>
-                      <td colspan="10" class="px-4 py-12 text-center text-slate-500">
-                        No grievances match the selected filters.
-                      </td>
-                    </tr>
-                  <?php else: ?>
-                    <?php foreach ($rows as $i => $r): ?>
-                      <?php
-                        $rDate = !empty($r['created_at']) ? date('Y-m-d', strtotime((string) $r['created_at'])) : '—';
-                      ?>
-                      <tr class="hover:bg-slate-50/80 transition-colors align-top">
-                        <td class="px-4 py-3 whitespace-nowrap text-sm text-slate-800"><?= $i + 1 ?></td>
-                        <td class="px-4 py-3 text-sm font-medium text-slate-800"><?= e($r['complainant_name'] ?? 'N/A') ?></td>
-                        <td class="px-4 py-3 whitespace-nowrap text-sm text-slate-600"><?= e($rDate) ?></td>
-                        <td class="px-4 py-3 text-sm text-slate-700"><?= e($r['type_name'] ?? '—') ?></td>
-                        <td class="px-4 py-3 text-sm text-slate-700"><?= e($r['subject'] ?? '—') ?></td>
-                        <td class="px-4 py-3 text-sm text-slate-600 max-w-[240px]"><?= e($r['description'] ?? '—') ?></td>
-                        <td class="px-4 py-3 whitespace-nowrap text-sm text-slate-700"><?= e($r['status'] ?? '—') ?></td>
-                        <td class="px-4 py-3 text-sm text-slate-700"><?= e($r['attended_by_name'] ?? '—') ?></td>
-                        <td class="px-4 py-3 text-sm text-slate-600 max-w-[200px]"><?= e($r['reply_details'] ?? '—') ?></td>
-                        <td class="px-4 py-3 text-sm text-slate-600 max-w-[200px]"><?= e($r['feedback_details'] ?? '—') ?></td>
-                      </tr>
-                    <?php endforeach; ?>
-                  <?php endif; ?>
-
-                </tbody>
-              </table>
-            </div>
-
-            <!-- Report Footer -->
-            <?php if (!empty($rows)): ?>
-              <div class="px-6 py-4 bg-slate-50/50 border-t border-slate-200 text-xs text-slate-600">
+              <div class="mt-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 text-xs text-slate-600">
                 <p>
-                  Total records: <span class="font-semibold text-slate-800"><?= count($rows) ?></span>
-                  · Generated on <?= date('d-m-Y H:i') ?>
+                  <span class="font-semibold text-slate-700">Period:</span>
+                  <?= e(date('d/m/Y', strtotime($filterFrom))) ?> – <?= e(date('d/m/Y', strtotime($filterTo))) ?>
+                </p>
+                <p>
+                  <span class="font-semibold text-slate-700">Filters:</span>
+                  Type: <?= e($filterType > 0 ? findName($grievanceTypes, $filterType, 'type_name') : 'All') ?>
+                  · Member: <?= e($filterMember > 0 ? findName($cellMembers, $filterMember, 'name') : 'All') ?>
+                  · Status: <?= e($filterStatus !== '' ? $filterStatus : 'All') ?>
                 </p>
               </div>
-            <?php endif; ?>
+            </div>
+
+            <!-- Report Table -->
+            <div class="bg-white border-x border-b border-slate-200 rounded-b-xl overflow-hidden">
+              <div class="overflow-x-auto">
+                <table class="w-full report-table">
+                  <thead>
+                    <tr class="bg-[#4A154B] text-white">
+                      <th class="px-3 py-3 text-left text-[11px] font-bold uppercase tracking-wider" style="width: 4%;">Sl.No.</th>
+                      <th class="px-3 py-3 text-left text-[11px] font-bold uppercase tracking-wider" style="width: 10%;">Name</th>
+                      <th class="px-3 py-3 text-left text-[11px] font-bold uppercase tracking-wider" style="width: 8%;">Date Of Posting</th>
+                      <th class="px-3 py-3 text-left text-[11px] font-bold uppercase tracking-wider" style="width: 12%;">Grievance Type</th>
+                      <th class="px-3 py-3 text-left text-[11px] font-bold uppercase tracking-wider" style="width: 10%;">Subject</th>
+                      <th class="px-3 py-3 text-left text-[11px] font-bold uppercase tracking-wider" style="width: 16%;">Description</th>
+                      <th class="px-3 py-3 text-left text-[11px] font-bold uppercase tracking-wider" style="width: 8%;">Status</th>
+                      <th class="px-3 py-3 text-left text-[11px] font-bold uppercase tracking-wider" style="width: 10%;">Attended by</th>
+                      <th class="px-3 py-3 text-left text-[11px] font-bold uppercase tracking-wider" style="width: 11%;">Reply Details</th>
+                      <th class="px-3 py-3 text-left text-[11px] font-bold uppercase tracking-wider" style="width: 11%;">Feedback Details</th>
+                    </tr>
+                  </thead>
+                  <tbody class="divide-y divide-slate-100 bg-white">
+
+                    <?php if (empty($rows)): ?>
+                      <tr>
+                        <td colspan="10" class="px-4 py-12 text-center text-slate-500">
+                          No grievances match the selected filters.
+                        </td>
+                      </tr>
+                    <?php else: ?>
+                      <?php foreach ($rows as $i => $r): ?>
+                        <?php
+                          $rDate = !empty($r['created_at']) ? date('Y-m-d', strtotime((string) $r['created_at'])) : '—';
+
+                          // Short previews
+                          $fullDesc     = (string) ($r['description'] ?? '');
+                          $descPreview  = mb_strlen($fullDesc, 'UTF-8') > 120 ? mb_substr($fullDesc, 0, 120, 'UTF-8') . '…' : $fullDesc;
+
+                          $replyFull    = (string) ($r['reply_details'] ?? '');
+                          $replyPreview = mb_strlen($replyFull, 'UTF-8') > 120 ? mb_substr($replyFull, 0, 120, 'UTF-8') . '…' : $replyFull;
+
+                          $fbFull       = (string) ($r['feedback_details'] ?? '');
+                          $fbPreview    = mb_strlen($fbFull, 'UTF-8') > 120 ? mb_substr($fbFull, 0, 120, 'UTF-8') . '…' : $fbFull;
+
+                          // Status badge colors
+                          $statusCls = match (strtolower((string) ($r['status'] ?? ''))) {
+                              'pending'     => 'bg-amber-100 text-amber-800 border-amber-200',
+                              'in progress' => 'bg-sky-100 text-sky-800 border-sky-200',
+                              'disposed'    => 'bg-emerald-100 text-emerald-800 border-emerald-200',
+                              'closed'      => 'bg-slate-100 text-slate-700 border-slate-200',
+                              'reopened'    => 'bg-pink-100 text-pink-800 border-pink-200',
+                              default       => 'bg-slate-100 text-slate-700 border-slate-200',
+                          };
+                        ?>
+                        <tr class="hover:bg-slate-50/80 transition-colors align-top">
+
+                          <td class="px-3 py-3 text-xs text-slate-800">
+                            <?= $i + 1 ?>
+                          </td>
+
+                          <td class="px-3 py-3 text-xs font-medium text-slate-800 break-words">
+                            <?= e($r['complainant_name'] ?? 'N/A') ?>
+                          </td>
+
+                          <td class="px-3 py-3 text-xs text-slate-600 whitespace-nowrap">
+                            <?= e($rDate) ?>
+                          </td>
+
+                          <td class="px-3 py-3 text-xs text-slate-700 break-words">
+                            <?= e($r['type_name'] ?? '—') ?>
+                          </td>
+
+                          <td class="px-3 py-3 text-xs text-slate-700 break-words">
+                            <?= e($r['subject'] ?? '—') ?>
+                          </td>
+
+                          <td class="px-3 py-3 text-xs text-slate-600 break-words" title="<?= e($fullDesc) ?>">
+                            <?= e($descPreview !== '' ? $descPreview : '—') ?>
+                          </td>
+
+                          <td class="px-3 py-3 text-xs whitespace-nowrap">
+                            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider border <?= $statusCls ?>">
+                              <?= e($r['status'] ?? '—') ?>
+                            </span>
+                          </td>
+
+                          <td class="px-3 py-3 text-xs text-slate-700 break-words">
+                            <?= e(($r['attended_by_name'] ?? '') !== '' ? $r['attended_by_name'] : '—') ?>
+                          </td>
+
+                          <td class="px-3 py-3 text-xs text-slate-600 break-words" title="<?= e($replyFull) ?>">
+                            <?= e($replyPreview !== '' ? $replyPreview : '—') ?>
+                          </td>
+
+                          <td class="px-3 py-3 text-xs text-slate-600 break-words" title="<?= e($fbFull) ?>">
+                            <?= e($fbPreview !== '' ? $fbPreview : '—') ?>
+                          </td>
+
+                        </tr>
+                      <?php endforeach; ?>
+                    <?php endif; ?>
+
+                  </tbody>
+                </table>
+              </div>
+
+              <!-- Report Footer -->
+              <?php if (!empty($rows)): ?>
+                <div class="px-6 py-4 bg-slate-50/50 border-t border-slate-200 text-xs text-slate-600">
+                  <p>
+                    Total records: <span class="font-semibold text-slate-800"><?= count($rows) ?></span>
+                    · Generated on <?= date('d-m-Y H:i') ?>
+                  </p>
+                </div>
+              <?php endif; ?>
+
+            </div>
 
           </div>
-
-        </div>
+        <?php else: ?>
+          <!-- Landing hint shown before submit -->
+          <div class="max-w-6xl mx-auto animate-fade-in-up" style="animation-delay: 120ms;">
+            <div class="bg-white border border-slate-200 rounded-2xl px-6 py-12 text-center shadow-sm">
+              <div class="inline-flex items-center justify-center w-16 h-16 rounded-full bg-purple-50 mb-4">
+                <i data-lucide="file-search" class="w-8 h-8 text-[#8B1E7E]"></i>
+              </div>
+              <h3 class="text-lg font-semibold text-slate-700">Apply filters to generate the report</h3>
+              <p class="text-sm text-slate-500 mt-1 max-w-md mx-auto">
+                Choose your date range and any additional filters above, then click <strong>Submit</strong> to view the complaint report.
+              </p>
+            </div>
+          </div>
+        <?php endif; ?>
 
       </main>
 
