@@ -8,13 +8,13 @@
  * Features:
  *   • Auth guard (STUDENT only)
  *   • Top navbar with RCSS logo + Oréll Grievance branding + student profile dropdown
- *   • Collapsible sidebar (Home, Profile, Logout)
+ *   • Collapsible sidebar (Home, Profile, Change Password, Logout)
  *   • Grievance list table (own grievances only) — fully fits viewport
  *   • Live search + entries-per-page selector
  *   • Status badges with color coding
  *   • Create Grievance modal (with file upload)
  *   • Edit Grievance modal (only for Pending / Reopened)
- *   • Dispose Grievance action (only for Pending / In Progress / Reopened)
+ *   • Dispose Grievance action (X icon — only for Pending / In Progress / Reopened)
  *   • View details modal + Reminder/Reopen action hooks
  *   • Empty state & pagination counter
  * ---------------------------------------------------------------------------
@@ -509,13 +509,23 @@ if ($conn instanceof mysqli) {
 $displayName  = !empty($studentData['name']) ? $studentData['name'] : $studentData['username'];
 $displayEmail = !empty($studentData['email']) ? $studentData['email'] : 'student@rajagiri.edu';
 
+// ---------------------------------------------------------------------------
+// PROFILE PICTURE RESOLUTION
+//   Files are saved at  <project-root>/uploads/profiles/...
+//   From student/ the browser URL must be  ../uploads/profiles/...
+//   The disk check must therefore use  __DIR__ . '/../uploads/profiles/...'
+// ---------------------------------------------------------------------------
 $hasProfilePicture = false;
 $profilePictureUrl = '';
+
 if (!empty($studentData['profile_image'])) {
-    $relativePath = ltrim((string) $studentData['profile_image'], '/');
-    if (file_exists(__DIR__ . '/' . $relativePath)) {
+    $relative     = ltrim((string) $studentData['profile_image'], '/');
+    $absolutePath = __DIR__ . '/../' . $relative;
+    $browserPath  = '../' . $relative;
+
+    if (file_exists($absolutePath) && is_file($absolutePath)) {
         $hasProfilePicture = true;
-        $profilePictureUrl = $relativePath;
+        $profilePictureUrl = $browserPath;
     }
 }
 
@@ -648,41 +658,67 @@ $totalGrievances = count($grievances);
   <div class="flex min-h-screen flex-1">
 
     <!-- ============================================================
-         SIDEBAR
+         SIDEBAR — Collapsible
+         Default  : w-20, icon-only with hover tooltips
+         Expanded : w-64, shows labels for every nav item
          ============================================================ -->
     <aside id="studentSidebar"
            class="w-20 bg-gradient-to-b from-[#4A154B] via-[#5A1B5C] to-[#006837]
-                  flex flex-col items-center py-4 shadow-2xl fixed inset-y-0 left-0 z-40
-                  transition-all duration-300">
+                  flex flex-col py-4 shadow-2xl fixed inset-y-0 left-0 z-40
+                  transition-all duration-300 ease-in-out overflow-hidden">
 
       <button id="sidebarToggle"
-              class="text-white/80 hover:text-white mb-8 p-2 rounded-lg hover:bg-white/10 transition-colors"
+              class="text-white/80 hover:text-white mb-8 p-2 rounded-lg hover:bg-white/10 transition-colors
+                     flex items-center justify-center w-14 mx-auto"
               aria-label="Toggle sidebar">
-        <i data-lucide="menu" class="w-6 h-6"></i>
+        <i data-lucide="menu" class="w-6 h-6 flex-shrink-0"></i>
       </button>
 
-      <nav class="flex flex-col items-center space-y-6 flex-1">
+      <nav class="flex flex-col space-y-2 flex-1 w-full px-3">
 
         <a href="dashboard.php"
-           class="group relative w-12 h-12 rounded-xl bg-white/20 backdrop-blur-sm
-                  flex items-center justify-center text-white shadow-lg ring-2 ring-white/30
-                  transition-all hover:scale-110 hover:bg-white/30"
-           title="Dashboard">
-          <i data-lucide="home" class="w-6 h-6"></i>
-          <span class="absolute left-full ml-3 hidden group-hover:block whitespace-nowrap
+           class="group relative w-full h-12 rounded-xl bg-white/20 backdrop-blur-sm
+                  flex items-center text-white shadow-lg ring-2 ring-white/30
+                  transition-all hover:bg-white/30
+                  px-3">
+          <i data-lucide="home" class="w-6 h-6 flex-shrink-0"></i>
+          <span class="sidebar-label ml-4 text-sm font-semibold whitespace-nowrap
+                       opacity-0 w-0 overflow-hidden transition-all duration-200">
+            Dashboard
+          </span>
+          <span class="sidebar-tooltip absolute left-full ml-3 hidden group-hover:block whitespace-nowrap
                        bg-[#4A154B] text-white text-xs px-3 py-1.5 rounded-lg shadow-lg z-50">
             Dashboard
           </span>
         </a>
 
         <a href="profile.php"
-           class="group relative w-12 h-12 rounded-xl bg-white/10 hover:bg-white/20
-                  flex items-center justify-center text-white transition-all hover:scale-110"
-           title="Profile">
-          <i data-lucide="user" class="w-6 h-6"></i>
-          <span class="absolute left-full ml-3 hidden group-hover:block whitespace-nowrap
+           class="group relative w-full h-12 rounded-xl bg-white/10 hover:bg-white/20
+                  flex items-center text-white transition-all
+                  px-3">
+          <i data-lucide="user" class="w-6 h-6 flex-shrink-0"></i>
+          <span class="sidebar-label ml-4 text-sm font-semibold whitespace-nowrap
+                       opacity-0 w-0 overflow-hidden transition-all duration-200">
+            My Profile
+          </span>
+          <span class="sidebar-tooltip absolute left-full ml-3 hidden group-hover:block whitespace-nowrap
                        bg-[#4A154B] text-white text-xs px-3 py-1.5 rounded-lg shadow-lg z-50">
-            Profile
+            My Profile
+          </span>
+        </a>
+
+        <a href="change_password.php"
+           class="group relative w-full h-12 rounded-xl bg-white/10 hover:bg-white/20
+                  flex items-center text-white transition-all
+                  px-3">
+          <i data-lucide="key" class="w-6 h-6 flex-shrink-0"></i>
+          <span class="sidebar-label ml-4 text-sm font-semibold whitespace-nowrap
+                       opacity-0 w-0 overflow-hidden transition-all duration-200">
+            Change Password
+          </span>
+          <span class="sidebar-tooltip absolute left-full ml-3 hidden group-hover:block whitespace-nowrap
+                       bg-[#4A154B] text-white text-xs px-3 py-1.5 rounded-lg shadow-lg z-50">
+            Change Password
           </span>
         </a>
 
@@ -691,11 +727,17 @@ $totalGrievances = count($grievances);
       <a href="#"
          data-logout-trigger="1"
          id="sidebarLogoutBtn"
-         class="group relative w-12 h-12 rounded-xl bg-white/10 hover:bg-red-500/40
-                flex items-center justify-center text-white transition-all hover:scale-110"
+         class="group relative w-full h-12 rounded-xl bg-white/10 hover:bg-red-500/40
+                flex items-center text-white transition-all
+                mx-3 px-3"
+         style="width: calc(100% - 1.5rem);"
          title="Logout">
-        <i data-lucide="log-out" class="w-6 h-6 group-hover:translate-x-0.5 transition-transform"></i>
-        <span class="absolute left-full ml-3 hidden group-hover:block whitespace-nowrap
+        <i data-lucide="log-out" class="w-6 h-6 flex-shrink-0"></i>
+        <span class="sidebar-label ml-4 text-sm font-semibold whitespace-nowrap
+                     opacity-0 w-0 overflow-hidden transition-all duration-200">
+          Logout
+        </span>
+        <span class="sidebar-tooltip absolute left-full ml-3 hidden group-hover:block whitespace-nowrap
                      bg-red-600 text-white text-xs px-3 py-1.5 rounded-lg shadow-lg z-50">
           Logout
         </span>
@@ -1002,7 +1044,7 @@ $totalGrievances = count($grievances);
                         <?= statusBadge($gStatus) ?>
                       </td>
 
-                      <!-- Actions: View | Edit | Dispose -->
+                      <!-- Actions: View | Edit | Dispose (X) -->
                       <td class="px-2 py-4">
                         <div class="flex items-center justify-center gap-1">
 
@@ -1040,13 +1082,14 @@ $totalGrievances = count($grievances);
                           <?php endif; ?>
 
                           <?php if ($canDispose): ?>
+                            <!-- Dispose uses an X icon -->
                             <button type="button"
                                     title="Dispose grievance"
                                     onclick='openDisposeModal(<?= $gId ?>, <?= json_encode($gNumber) ?>)'
-                                    class="w-7 h-7 rounded-full bg-emerald-50 hover:bg-emerald-600
-                                           inline-flex items-center justify-center text-emerald-700 hover:text-white
+                                    class="w-7 h-7 rounded-full bg-red-50 hover:bg-red-600
+                                           inline-flex items-center justify-center text-red-600 hover:text-white
                                            transition-all duration-200 hover:scale-110 flex-shrink-0">
-                              <i data-lucide="check-check" class="w-3.5 h-3.5"></i>
+                              <i data-lucide="x" class="w-3.5 h-3.5"></i>
                             </button>
                           <?php endif; ?>
 
@@ -1462,7 +1505,7 @@ $totalGrievances = count($grievances);
   </div>
 
   <!-- ============================================================ -->
-  <!-- DISPOSE CONFIRMATION MODAL                                    -->
+  <!-- DISPOSE CONFIRMATION MODAL (X THEME)                          -->
   <!-- ============================================================ -->
   <div id="disposeConfirmModal" class="hidden fixed inset-0 z-[70] flex items-center justify-center p-4">
     <div class="absolute inset-0 bg-black/50 backdrop-blur-sm" onclick="closeDisposeModal()"></div>
@@ -1474,8 +1517,8 @@ $totalGrievances = count($grievances);
 
       <div class="px-6 pt-6 pb-2 flex flex-col items-center text-center">
         <div class="w-16 h-16 rounded-full flex items-center justify-center mb-4
-                    bg-gradient-to-br from-emerald-100 to-teal-100 ring-4 ring-emerald-50">
-          <i data-lucide="check-check" class="w-8 h-8 text-emerald-600"></i>
+                    bg-gradient-to-br from-red-100 to-rose-100 ring-4 ring-red-50">
+          <i data-lucide="x" class="w-8 h-8 text-red-500"></i>
         </div>
 
         <h3 class="text-xl font-bold text-slate-800 mb-2">Dispose Grievance?</h3>
@@ -1483,7 +1526,7 @@ $totalGrievances = count($grievances);
         <p class="text-sm text-slate-500 leading-relaxed">
           You are about to mark
           <span id="disposeGrievanceNumber" class="font-bold text-[#8B1E7E] break-words">this grievance</span>
-          as <strong class="text-emerald-700">Disposed</strong>.
+          as <strong class="text-red-600">Disposed</strong>.
         </p>
 
         <p class="text-xs text-amber-600 font-medium mt-3 flex items-center gap-1.5">
@@ -1508,12 +1551,12 @@ $totalGrievances = count($grievances);
 
         <button type="submit"
                 class="flex-1 px-5 py-3 rounded-xl font-bold text-white
-                       bg-gradient-to-r from-emerald-500 via-emerald-600 to-teal-600
-                       hover:from-emerald-600 hover:via-emerald-700 hover:to-teal-700
-                       shadow-lg shadow-emerald-500/30 hover:shadow-emerald-500/50
+                       bg-gradient-to-r from-red-500 via-red-600 to-rose-600
+                       hover:from-red-600 hover:via-red-700 hover:to-rose-700
+                       shadow-lg shadow-red-500/30 hover:shadow-red-500/50
                        transition-all duration-300 hover:-translate-y-0.5 active:scale-95
                        flex items-center justify-center gap-2">
-          <i data-lucide="check-check" class="w-4 h-4"></i>
+          <i data-lucide="x" class="w-4 h-4"></i>
           <span>Dispose</span>
         </button>
       </form>
@@ -1731,7 +1774,7 @@ $totalGrievances = count($grievances);
     })();
 
     // ============================================================
-    // SIDEBAR TOGGLE (collapsible)
+    // SIDEBAR EXPAND / COLLAPSE
     // ============================================================
     (function () {
       const toggleBtn = document.getElementById('sidebarToggle');
@@ -1739,21 +1782,45 @@ $totalGrievances = count($grievances);
       const main      = document.getElementById('studentMain');
       if (!toggleBtn || !sidebar || !main) return;
 
-      let collapsed = false;
+      const labels   = sidebar.querySelectorAll('.sidebar-label');
+      const tooltips = sidebar.querySelectorAll('.sidebar-tooltip');
+
+      let expanded = false;
+
       toggleBtn.addEventListener('click', function () {
-        collapsed = !collapsed;
-        if (collapsed) {
+        expanded = !expanded;
+
+        if (expanded) {
           sidebar.classList.remove('w-20');
-          sidebar.classList.add('w-0', 'overflow-hidden');
+          sidebar.classList.add('w-64');
           main.classList.remove('ml-20');
-          main.classList.add('ml-0');
+          main.classList.add('ml-64');
+
+          labels.forEach(function (el) {
+            el.classList.remove('opacity-0', 'w-0');
+            el.classList.add('opacity-100', 'w-auto');
+          });
+          tooltips.forEach(function (el) {
+            el.classList.add('hidden');
+          });
         } else {
           sidebar.classList.add('w-20');
-          sidebar.classList.remove('w-0', 'overflow-hidden');
+          sidebar.classList.remove('w-64');
           main.classList.add('ml-20');
-          main.classList.remove('ml-0');
+          main.classList.remove('ml-64');
+
+          labels.forEach(function (el) {
+            el.classList.add('opacity-0', 'w-0');
+            el.classList.remove('opacity-100', 'w-auto');
+          });
+          tooltips.forEach(function (el) {
+            el.classList.remove('hidden');
+          });
         }
-        setTimeout(() => { if (typeof lucide !== 'undefined') lucide.createIcons(); }, 50);
+
+        setTimeout(function () {
+          if (typeof lucide !== 'undefined') lucide.createIcons();
+        }, 250);
       });
     })();
 
@@ -1931,7 +1998,7 @@ $totalGrievances = count($grievances);
     }
 
     // ============================================================
-    // DISPOSE CONFIRMATION MODAL
+    // DISPOSE CONFIRMATION MODAL (X Theme)
     // ============================================================
     const disposeConfirmModal = document.getElementById('disposeConfirmModal');
     const disposeConfirmPanel = document.getElementById('disposeConfirmPanel');
