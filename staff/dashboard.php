@@ -1,13 +1,13 @@
 <?php
 /**
- * student/dashboard.php
+ * staff/dashboard.php
  * ---------------------------------------------------------------------------
- * Student — Grievance Details Dashboard
+ * Staff (Teaching / Non-Teaching) — Grievance Details Dashboard
  * Rajagiri College Grievance Redressal Portal
  *
  * Features:
- *   • Auth guard (STUDENT only)
- *   • Top navbar with RCSS logo + Oréll Grievance branding + student profile dropdown
+ *   • Auth guard (TEACHER / NON_TEACHING only)
+ *   • Top navbar with RCSS logo + Oréll Grievance branding + staff profile dropdown
  *   • Collapsible sidebar (Home, Profile, Change Password, Logout)
  *   • Grievance list table (own grievances only) — fully fits viewport
  *   • Live search + entries-per-page selector
@@ -15,7 +15,7 @@
  *   • Create Grievance modal (with file upload → stored in uploads/grievances/)
  *   • Edit Grievance modal (only for Pending / Reopened)
  *   • Dispose Grievance action (X icon — only for Pending / In Progress / Reopened)
- *   • View details modal with in-page image/PDF preview overlay
+ *   • View details modal (with in-page image preview + PDF/doc fallback)
  *   • Reminder / Reopen action hooks
  *   • Empty state & pagination counter
  * ---------------------------------------------------------------------------
@@ -35,12 +35,12 @@ ini_set('display_startup_errors', '0');
 error_reporting(E_ALL);
 
 // ---------------------------------------------------------------------------
-// 2. AUTH GUARD (Student only)
+// 2. AUTH GUARD (Staff only — TEACHER or NON_TEACHING)
 // ---------------------------------------------------------------------------
 $sessionRole = isset($_SESSION['role']) ? strtoupper((string) $_SESSION['role']) : '';
 
-if (empty($_SESSION['user_id']) || $sessionRole !== 'STUDENT') {
-    header('Location: ../login.php?role=student');
+if (empty($_SESSION['user_id']) || !in_array($sessionRole, ['TEACHER', 'NON_TEACHING'], true)) {
+    header('Location: ../login.php?role=staff');
     exit;
 }
 
@@ -117,7 +117,7 @@ if (empty($_SESSION['csrf_token'])) {
 $csrfToken = (string) $_SESSION['csrf_token'];
 
 // ---------------------------------------------------------------------------
-// 7. HANDLE POST ACTIONS (create_grievance | update_grievance | dispose_grievance)
+// 7. HANDLE POST ACTIONS
 // ---------------------------------------------------------------------------
 $flashSuccess = '';
 $flashError   = '';
@@ -278,7 +278,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 if (!empty($targetPath) && file_exists($targetPath)) {
                     @unlink($targetPath);
                 }
-                error_log('[Create Grievance] ' . $ex->getMessage());
+                error_log('[Staff Create Grievance] ' . $ex->getMessage());
                 $flashError = $ex->getMessage() ?: 'A system error occurred while submitting your grievance.';
             }
         }
@@ -381,7 +381,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $flashSuccess = 'Grievance updated successfully.';
 
             } catch (Throwable $ex) {
-                error_log('[Update Grievance] ' . $ex->getMessage());
+                error_log('[Staff Update Grievance] ' . $ex->getMessage());
                 $flashError = $ex->getMessage() ?: 'A system error occurred while updating your grievance.';
             }
         }
@@ -453,7 +453,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $flashSuccess = 'Grievance has been marked as Disposed.';
 
             } catch (Throwable $ex) {
-                error_log('[Dispose Grievance] ' . $ex->getMessage());
+                error_log('[Staff Dispose Grievance] ' . $ex->getMessage());
                 $flashError = $ex->getMessage() ?: 'A system error occurred while disposing your grievance.';
             }
         }
@@ -476,23 +476,25 @@ if (!empty($_SESSION['flash_error'])) {
 }
 
 // ---------------------------------------------------------------------------
-// 8. FETCH STUDENT PROFILE
+// 8. FETCH STAFF PROFILE
 // ---------------------------------------------------------------------------
-$studentData = [
-    'username'      => $_SESSION['username'] ?? 'Student',
+$staffData = [
+    'username'      => $_SESSION['username'] ?? 'Staff',
     'name'          => '',
     'email'         => '',
     'profile_image' => '',
+    'staff_type'    => '',
 ];
 
 if ($conn instanceof mysqli) {
     try {
         $sql = "SELECT  u.username,
-                        s.name,
-                        s.email,
-                        s.profile_image
+                        st.name,
+                        st.email,
+                        st.profile_image,
+                        st.staff_type
                 FROM users u
-                LEFT JOIN students s ON s.user_id = u.id
+                LEFT JOIN staff st ON st.user_id = u.id
                 WHERE u.id = ?
                 LIMIT 1";
 
@@ -504,29 +506,27 @@ if ($conn instanceof mysqli) {
 
             if ($res && $res->num_rows > 0) {
                 $row = $res->fetch_assoc();
-                $studentData['username']      = $row['username']      ?? $studentData['username'];
-                $studentData['name']          = $row['name']          ?? '';
-                $studentData['email']         = $row['email']         ?? '';
-                $studentData['profile_image'] = $row['profile_image'] ?? '';
+                $staffData['username']      = $row['username']      ?? $staffData['username'];
+                $staffData['name']          = $row['name']          ?? '';
+                $staffData['email']         = $row['email']         ?? '';
+                $staffData['profile_image'] = $row['profile_image'] ?? '';
+                $staffData['staff_type']    = $row['staff_type']    ?? '';
             }
             $stmt->close();
         }
     } catch (Throwable $ex) {
-        error_log('[Student Dashboard Profile] ' . $ex->getMessage());
+        error_log('[Staff Dashboard Profile] ' . $ex->getMessage());
     }
 }
 
-$displayName  = !empty($studentData['name']) ? $studentData['name'] : $studentData['username'];
-$displayEmail = !empty($studentData['email']) ? $studentData['email'] : 'student@rajagiri.edu';
+$displayName  = !empty($staffData['name']) ? $staffData['name'] : $staffData['username'];
+$displayEmail = !empty($staffData['email']) ? $staffData['email'] : 'staff@rajagiri.edu';
 
-// ---------------------------------------------------------------------------
-// PROFILE PICTURE RESOLUTION
-// ---------------------------------------------------------------------------
 $hasProfilePicture = false;
 $profilePictureUrl = '';
 
-if (!empty($studentData['profile_image'])) {
-    $relative     = ltrim((string) $studentData['profile_image'], '/');
+if (!empty($staffData['profile_image'])) {
+    $relative     = ltrim((string) $staffData['profile_image'], '/');
     $absolutePath = __DIR__ . '/../' . $relative;
     $browserPath  = '../' . $relative;
 
@@ -537,7 +537,7 @@ if (!empty($studentData['profile_image'])) {
 }
 
 // ---------------------------------------------------------------------------
-// 9. FETCH ACTIVE GRIEVANCE TYPES (for the modal dropdown)
+// 9. FETCH ACTIVE GRIEVANCE TYPES
 // ---------------------------------------------------------------------------
 $grievanceTypes = [];
 
@@ -550,12 +550,12 @@ if ($conn instanceof mysqli) {
             }
         }
     } catch (Throwable $ex) {
-        error_log('[Student Dashboard Grievance Types] ' . $ex->getMessage());
+        error_log('[Staff Dashboard Grievance Types] ' . $ex->getMessage());
     }
 }
 
 // ---------------------------------------------------------------------------
-// 10. FETCH STUDENT'S GRIEVANCES (with type join + attachment_path)
+// 10. FETCH STAFF'S GRIEVANCES
 // ---------------------------------------------------------------------------
 $grievances = [];
 
@@ -589,7 +589,7 @@ if ($conn instanceof mysqli) {
             $stmt->close();
         }
     } catch (Throwable $ex) {
-        error_log('[Student Dashboard Grievances] ' . $ex->getMessage());
+        error_log('[Staff Dashboard Grievances] ' . $ex->getMessage());
     }
 }
 
@@ -600,7 +600,7 @@ $totalGrievances = count($grievances);
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Grievance Details — Student | Rajagiri College Grievance Portal</title>
+  <title>Grievance Details — Staff | Rajagiri College Grievance Portal</title>
   <link rel="icon" type="image/svg+xml" href="../public/favicon.svg" />
 
   <script src="https://cdn.tailwindcss.com"></script>
@@ -666,7 +666,7 @@ $totalGrievances = count($grievances);
   <div class="flex min-h-screen flex-1">
 
     <!-- SIDEBAR -->
-    <aside id="studentSidebar"
+    <aside id="staffSidebar"
            class="w-20 bg-gradient-to-b from-[#4A154B] via-[#5A1B5C] to-[#006837]
                   flex flex-col py-4 shadow-2xl fixed inset-y-0 left-0 z-40
                   transition-all duration-300 ease-in-out overflow-hidden">
@@ -683,47 +683,32 @@ $totalGrievances = count($grievances);
         <a href="dashboard.php"
            class="group relative w-full h-12 rounded-xl bg-white/20 backdrop-blur-sm
                   flex items-center text-white shadow-lg ring-2 ring-white/30
-                  transition-all hover:bg-white/30
-                  px-3">
+                  transition-all hover:bg-white/30 px-3">
           <i data-lucide="home" class="w-6 h-6 flex-shrink-0"></i>
           <span class="sidebar-label ml-4 text-sm font-semibold whitespace-nowrap
-                       opacity-0 w-0 overflow-hidden transition-all duration-200">
-            Dashboard
-          </span>
+                       opacity-0 w-0 overflow-hidden transition-all duration-200">Dashboard</span>
           <span class="sidebar-tooltip absolute left-full ml-3 hidden group-hover:block whitespace-nowrap
-                       bg-[#4A154B] text-white text-xs px-3 py-1.5 rounded-lg shadow-lg z-50">
-            Dashboard
-          </span>
+                       bg-[#4A154B] text-white text-xs px-3 py-1.5 rounded-lg shadow-lg z-50">Dashboard</span>
         </a>
 
         <a href="profile.php"
            class="group relative w-full h-12 rounded-xl bg-white/10 hover:bg-white/20
-                  flex items-center text-white transition-all
-                  px-3">
+                  flex items-center text-white transition-all px-3">
           <i data-lucide="user" class="w-6 h-6 flex-shrink-0"></i>
           <span class="sidebar-label ml-4 text-sm font-semibold whitespace-nowrap
-                       opacity-0 w-0 overflow-hidden transition-all duration-200">
-            My Profile
-          </span>
+                       opacity-0 w-0 overflow-hidden transition-all duration-200">My Profile</span>
           <span class="sidebar-tooltip absolute left-full ml-3 hidden group-hover:block whitespace-nowrap
-                       bg-[#4A154B] text-white text-xs px-3 py-1.5 rounded-lg shadow-lg z-50">
-            My Profile
-          </span>
+                       bg-[#4A154B] text-white text-xs px-3 py-1.5 rounded-lg shadow-lg z-50">My Profile</span>
         </a>
 
         <a href="change_password.php"
            class="group relative w-full h-12 rounded-xl bg-white/10 hover:bg-white/20
-                  flex items-center text-white transition-all
-                  px-3">
+                  flex items-center text-white transition-all px-3">
           <i data-lucide="key" class="w-6 h-6 flex-shrink-0"></i>
           <span class="sidebar-label ml-4 text-sm font-semibold whitespace-nowrap
-                       opacity-0 w-0 overflow-hidden transition-all duration-200">
-            Change Password
-          </span>
+                       opacity-0 w-0 overflow-hidden transition-all duration-200">Change Password</span>
           <span class="sidebar-tooltip absolute left-full ml-3 hidden group-hover:block whitespace-nowrap
-                       bg-[#4A154B] text-white text-xs px-3 py-1.5 rounded-lg shadow-lg z-50">
-            Change Password
-          </span>
+                       bg-[#4A154B] text-white text-xs px-3 py-1.5 rounded-lg shadow-lg z-50">Change Password</span>
         </a>
 
       </nav>
@@ -732,27 +717,22 @@ $totalGrievances = count($grievances);
          data-logout-trigger="1"
          id="sidebarLogoutBtn"
          class="group relative w-full h-12 rounded-xl bg-white/10 hover:bg-red-500/40
-                flex items-center text-white transition-all
-                mx-3 px-3"
+                flex items-center text-white transition-all mx-3 px-3"
          style="width: calc(100% - 1.5rem);"
          title="Logout">
         <i data-lucide="log-out" class="w-6 h-6 flex-shrink-0"></i>
         <span class="sidebar-label ml-4 text-sm font-semibold whitespace-nowrap
-                     opacity-0 w-0 overflow-hidden transition-all duration-200">
-          Logout
-        </span>
+                     opacity-0 w-0 overflow-hidden transition-all duration-200">Logout</span>
         <span class="sidebar-tooltip absolute left-full ml-3 hidden group-hover:block whitespace-nowrap
-                     bg-red-600 text-white text-xs px-3 py-1.5 rounded-lg shadow-lg z-50">
-          Logout
-        </span>
+                     bg-red-600 text-white text-xs px-3 py-1.5 rounded-lg shadow-lg z-50">Logout</span>
       </a>
 
     </aside>
 
-    <!-- MAIN CONTENT WRAPPER -->
-    <div id="studentMain" class="flex-1 ml-20 flex flex-col min-h-screen transition-all duration-300">
+    <!-- MAIN CONTENT -->
+    <div id="staffMain" class="flex-1 ml-20 flex flex-col min-h-screen transition-all duration-300">
 
-      <!-- TOP HEADER -->
+      <!-- HEADER -->
       <header class="bg-white border-b border-slate-200 shadow-sm sticky top-0 z-30">
         <div class="flex items-center justify-between px-6 py-4">
 
@@ -761,17 +741,15 @@ $totalGrievances = count($grievances);
               <img src="../public/rcss-logo.png" alt="RCSS Logo"
                    class="h-10 md:h-11 w-auto transition-transform group-hover:scale-105" />
             </a>
-
             <div class="hidden sm:flex items-center h-10">
               <div class="w-px h-full bg-gradient-to-b from-transparent via-slate-300 to-transparent"></div>
             </div>
-
             <img src="../public/orel-grievance.png" alt="Oréll Grievance"
                  class="hidden sm:block h-8 md:h-9 w-auto object-contain" />
           </div>
 
-          <div class="relative" id="student-dropdown-container">
-            <button id="student-dropdown-btn"
+          <div class="relative" id="staff-dropdown-container">
+            <button id="staff-dropdown-btn"
                     type="button"
                     aria-haspopup="true"
                     aria-expanded="false"
@@ -787,14 +765,12 @@ $totalGrievances = count($grievances);
                 </div>
               <?php endif; ?>
 
-              <span class="hidden sm:block text-sm font-semibold text-slate-700">
-                <?= e($displayName) ?>
-              </span>
-              <i data-lucide="chevron-down" id="student-chevron"
+              <span class="hidden sm:block text-sm font-semibold text-slate-700"><?= e($displayName) ?></span>
+              <i data-lucide="chevron-down" id="staff-chevron"
                  class="w-4 h-4 text-slate-500 transition-transform duration-300"></i>
             </button>
 
-            <div id="student-dropdown-menu"
+            <div id="staff-dropdown-menu"
                  class="hidden absolute right-0 mt-2 w-64 bg-white rounded-xl shadow-2xl
                         border border-slate-200 py-2 z-50 overflow-hidden">
 
@@ -882,8 +858,7 @@ $totalGrievances = count($grievances);
               </h1>
               <nav class="flex items-center space-x-2 text-sm text-slate-500">
                 <a href="dashboard.php" class="flex items-center hover:text-[#8B1E7E] transition-colors">
-                  <i data-lucide="layout-dashboard" class="w-4 h-4 mr-1"></i>
-                  Dashboard
+                  <i data-lucide="layout-dashboard" class="w-4 h-4 mr-1"></i>Dashboard
                 </a>
                 <span class="text-slate-300">/</span>
                 <a href="dashboard.php" class="hover:text-[#8B1E7E] transition-colors">Grievance</a>
@@ -943,10 +918,7 @@ $totalGrievances = count($grievances);
 
               <div class="relative w-full sm:w-80">
                 <i data-lucide="search" class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400"></i>
-                <input type="text"
-                       id="searchInput"
-                       placeholder="Search.."
-                       autocomplete="off"
+                <input type="text" id="searchInput" placeholder="Search.." autocomplete="off"
                        class="w-full pl-10 pr-4 py-2 border-2 border-slate-200 rounded-lg text-sm
                               focus:outline-none focus:border-[#4A154B] focus:ring-4 focus:ring-[#4A154B]/10
                               hover:border-[#4A154B]/40 transition-all bg-white" />
@@ -986,7 +958,6 @@ $totalGrievances = count($grievances);
               <tbody class="divide-y divide-slate-100" id="grievancesTableBody">
 
                 <?php if (empty($grievances)): ?>
-
                   <tr>
                     <td colspan="8" class="px-4 py-16 text-center text-slate-500">
                       <div class="flex flex-col items-center justify-center">
@@ -994,13 +965,10 @@ $totalGrievances = count($grievances);
                           <i data-lucide="inbox" class="w-8 h-8 text-[#8B1E7E]"></i>
                         </div>
                         <p class="text-lg font-semibold text-slate-700">No data available in table</p>
-                        <p class="text-sm text-slate-500 mt-1">
-                          Click the "+" button above to submit your first grievance.
-                        </p>
+                        <p class="text-sm text-slate-500 mt-1">Click the "+" button above to submit your first grievance.</p>
                       </div>
                     </td>
                   </tr>
-
                 <?php else: ?>
 
                   <?php foreach ($grievances as $index => $row): ?>
@@ -1023,29 +991,12 @@ $totalGrievances = count($grievances);
                     ?>
                     <tr class="hover:bg-slate-50/80 transition-colors align-middle">
 
-                      <td class="px-2 py-4 text-xs font-medium text-slate-900">
-                        <?= $index + 1 ?>
-                      </td>
-
-                      <td class="px-2 py-4 text-xs font-semibold text-[#4A154B] break-words">
-                        <?= e($gNumber) ?>
-                      </td>
-
-                      <td class="px-2 py-4 text-xs text-slate-700 break-words">
-                        <?= e($gType) ?>
-                      </td>
-
-                      <td class="px-2 py-4 text-xs text-slate-600 whitespace-nowrap">
-                        <?= e($gCreated) ?>
-                      </td>
-
-                      <td class="px-2 py-4 text-xs text-slate-700 break-words" title="<?= e($gSubject) ?>">
-                        <?= e($gSubject) ?>
-                      </td>
-
-                      <td class="px-2 py-4 whitespace-nowrap">
-                        <?= statusBadge($gStatus) ?>
-                      </td>
+                      <td class="px-2 py-4 text-xs font-medium text-slate-900"><?= $index + 1 ?></td>
+                      <td class="px-2 py-4 text-xs font-semibold text-[#4A154B] break-words"><?= e($gNumber) ?></td>
+                      <td class="px-2 py-4 text-xs text-slate-700 break-words"><?= e($gType) ?></td>
+                      <td class="px-2 py-4 text-xs text-slate-600 whitespace-nowrap"><?= e($gCreated) ?></td>
+                      <td class="px-2 py-4 text-xs text-slate-700 break-words" title="<?= e($gSubject) ?>"><?= e($gSubject) ?></td>
+                      <td class="px-2 py-4 whitespace-nowrap"><?= statusBadge($gStatus) ?></td>
 
                       <td class="px-2 py-4">
                         <div class="flex items-center justify-center gap-1">
@@ -1107,8 +1058,7 @@ $totalGrievances = count($grievances);
                                            bg-amber-50 hover:bg-amber-500 text-amber-700 hover:text-white
                                            border border-amber-200 hover:border-amber-500
                                            transition-all duration-200 hover:-translate-y-0.5 active:scale-95 whitespace-nowrap">
-                              <i data-lucide="bell" class="w-3 h-3"></i>
-                              <span>Reminder</span>
+                              <i data-lucide="bell" class="w-3 h-3"></i><span>Reminder</span>
                             </button>
                           </form>
                         <?php elseif ($canReopen): ?>
@@ -1118,8 +1068,7 @@ $totalGrievances = count($grievances);
                                          bg-rose-50 hover:bg-rose-500 text-rose-700 hover:text-white
                                          border border-rose-200 hover:border-rose-500
                                          transition-all duration-200 hover:-translate-y-0.5 active:scale-95 whitespace-nowrap">
-                            <i data-lucide="rotate-ccw" class="w-3 h-3"></i>
-                            <span>Reopen</span>
+                            <i data-lucide="rotate-ccw" class="w-3 h-3"></i><span>Reopen</span>
                           </button>
                         <?php else: ?>
                           <span class="text-xs text-slate-400 italic">—</span>
@@ -1134,7 +1083,6 @@ $totalGrievances = count($grievances);
               </tbody>
             </table>
 
-            <!-- Footer Info & Pagination -->
             <div class="px-4 py-4 bg-slate-50/50 border-t border-slate-200
                         flex flex-col sm:flex-row items-center justify-between gap-4">
 
@@ -1152,22 +1100,16 @@ $totalGrievances = count($grievances);
                 <button type="button" id="prevPageBtn"
                         class="px-4 py-2 rounded-lg text-sm font-medium text-slate-500
                                hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-                        disabled>
-                  Previous
-                </button>
+                        disabled>Previous</button>
 
                 <span id="currentPageBadge"
                       class="inline-flex items-center justify-center w-9 h-9 rounded-lg
-                             bg-[#4A154B] text-white text-sm font-bold shadow-md">
-                  1
-                </span>
+                             bg-[#4A154B] text-white text-sm font-bold shadow-md">1</span>
 
                 <button type="button" id="nextPageBtn"
                         class="px-4 py-2 rounded-lg text-sm font-medium text-slate-500
                                hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-                        disabled>
-                  Next
-                </button>
+                        disabled>Next</button>
               </div>
 
             </div>
@@ -1187,12 +1129,8 @@ $totalGrievances = count($grievances);
               <div class="flex items-start space-x-3">
                 <img src="../public/rcss-logo.png" alt="RCSS Logo" class="h-12 w-auto" />
                 <div>
-                  <p class="font-bold text-[#4A154B] text-sm">
-                    Rajagiri College of Social Sciences
-                  </p>
-                  <p class="text-xs text-slate-600 mt-1">
-                    Grievance Redressal Portal
-                  </p>
+                  <p class="font-bold text-[#4A154B] text-sm">Rajagiri College of Social Sciences</p>
+                  <p class="text-xs text-slate-600 mt-1">Grievance Redressal Portal</p>
                 </div>
               </div>
 
@@ -1225,7 +1163,7 @@ $totalGrievances = count($grievances);
                 <ul class="space-y-1.5 text-xs text-slate-700">
                   <li class="flex items-center space-x-2">
                     <i data-lucide="mail" class="w-3.5 h-3.5 text-[#E5097F]"></i>
-                    <span>student.grievance@rajagiri.edu</span>
+                    <span>staff.grievance@rajagiri.edu</span>
                   </li>
                   <li class="flex items-center space-x-2">
                     <i data-lucide="phone" class="w-3.5 h-3.5 text-[#E5097F]"></i>
@@ -1292,9 +1230,7 @@ $totalGrievances = count($grievances);
           <label for="grievance_type_id" class="block text-sm font-semibold text-slate-700">
             Grievance Type <span class="text-[#E5097F]">*</span>
           </label>
-          <select id="grievance_type_id"
-                  name="grievance_type_id"
-                  required
+          <select id="grievance_type_id" name="grievance_type_id" required
                   class="w-full px-4 py-3 border-2 border-slate-200 rounded-xl appearance-none bg-white
                          text-slate-800 font-medium
                          focus:outline-none focus:border-[#4A154B] focus:ring-4 focus:ring-[#4A154B]/10
@@ -1315,11 +1251,7 @@ $totalGrievances = count($grievances);
           <label for="subject" class="block text-sm font-semibold text-slate-700">
             Subject <span class="text-[#E5097F]">*</span>
           </label>
-          <input type="text"
-                 id="subject"
-                 name="subject"
-                 required
-                 maxlength="120"
+          <input type="text" id="subject" name="subject" required maxlength="120"
                  placeholder="Enter a brief subject"
                  class="w-full px-4 py-3 border-2 border-slate-200 rounded-xl bg-white text-slate-800 font-medium
                         placeholder-slate-400
@@ -1332,13 +1264,8 @@ $totalGrievances = count($grievances);
         </div>
 
         <div class="space-y-2">
-          <label for="description" class="block text-sm font-semibold text-slate-700">
-            Description
-          </label>
-          <textarea id="description"
-                    name="description"
-                    rows="5"
-                    maxlength="420"
+          <label for="description" class="block text-sm font-semibold text-slate-700">Description</label>
+          <textarea id="description" name="description" rows="5" maxlength="420"
                     placeholder="Describe your grievance in detail…"
                     class="w-full px-4 py-3 border-2 border-slate-200 rounded-xl bg-white text-slate-800 font-medium
                            placeholder-slate-400 resize-none
@@ -1351,10 +1278,7 @@ $totalGrievances = count($grievances);
         </div>
 
         <div class="space-y-2">
-          <label for="attachment" class="block text-sm font-semibold text-slate-700">
-            Attachment
-          </label>
-
+          <label for="attachment" class="block text-sm font-semibold text-slate-700">Attachment</label>
           <div class="flex items-center gap-3">
             <label for="attachment"
                    class="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg border-2 border-slate-200
@@ -1363,18 +1287,10 @@ $totalGrievances = count($grievances);
               <i data-lucide="upload" class="w-4 h-4"></i>
               <span>Choose files</span>
             </label>
-
-            <span id="attachmentFileName" class="text-sm text-slate-500 truncate">
-              No file chosen
-            </span>
-
-            <input type="file"
-                   id="attachment"
-                   name="attachment"
-                   accept=".pdf,.jpg,.jpeg,.png,.doc,.docx"
-                   class="hidden" />
+            <span id="attachmentFileName" class="text-sm text-slate-500 truncate">No file chosen</span>
+            <input type="file" id="attachment" name="attachment"
+                   accept=".pdf,.jpg,.jpeg,.png,.doc,.docx" class="hidden" />
           </div>
-
           <p class="text-xs text-slate-500">(Max 5 Mb)</p>
         </div>
 
@@ -1386,13 +1302,11 @@ $totalGrievances = count($grievances);
                          text-white font-bold shadow-lg shadow-purple-500/30 hover:shadow-purple-500/50
                          transition-all duration-300 hover:-translate-y-0.5 active:scale-95
                          flex items-center justify-center gap-2">
-            <i data-lucide="send" class="w-4 h-4"></i>
-            <span>Submit</span>
+            <i data-lucide="send" class="w-4 h-4"></i><span>Submit</span>
           </button>
         </div>
 
       </form>
-
     </div>
   </div>
 
@@ -1426,9 +1340,7 @@ $totalGrievances = count($grievances);
           <label for="edit_grievance_type_id" class="block text-sm font-semibold text-slate-700">
             Grievance Type <span class="text-[#E5097F]">*</span>
           </label>
-          <select id="edit_grievance_type_id"
-                  name="grievance_type_id"
-                  required
+          <select id="edit_grievance_type_id" name="grievance_type_id" required
                   class="w-full px-4 py-3 border-2 border-slate-200 rounded-xl appearance-none bg-white
                          text-slate-800 font-medium
                          focus:outline-none focus:border-[#4A154B] focus:ring-4 focus:ring-[#4A154B]/10
@@ -1444,11 +1356,7 @@ $totalGrievances = count($grievances);
           <label for="edit_subject" class="block text-sm font-semibold text-slate-700">
             Subject <span class="text-[#E5097F]">*</span>
           </label>
-          <input type="text"
-                 id="edit_subject"
-                 name="subject"
-                 required
-                 maxlength="120"
+          <input type="text" id="edit_subject" name="subject" required maxlength="120"
                  placeholder="Enter a brief subject"
                  class="w-full px-4 py-3 border-2 border-slate-200 rounded-xl bg-white text-slate-800 font-medium
                         placeholder-slate-400
@@ -1461,13 +1369,8 @@ $totalGrievances = count($grievances);
         </div>
 
         <div class="space-y-2">
-          <label for="edit_description" class="block text-sm font-semibold text-slate-700">
-            Description
-          </label>
-          <textarea id="edit_description"
-                    name="description"
-                    rows="5"
-                    maxlength="420"
+          <label for="edit_description" class="block text-sm font-semibold text-slate-700">Description</label>
+          <textarea id="edit_description" name="description" rows="5" maxlength="420"
                     placeholder="Describe your grievance in detail…"
                     class="w-full px-4 py-3 border-2 border-slate-200 rounded-xl bg-white text-slate-800 font-medium
                            placeholder-slate-400 resize-none
@@ -1480,14 +1383,10 @@ $totalGrievances = count($grievances);
         </div>
 
         <div class="pt-2 flex justify-center gap-3">
-          <button type="button"
-                  onclick="closeEditGrievanceModal()"
+          <button type="button" onclick="closeEditGrievanceModal()"
                   class="px-6 py-3 rounded-xl font-semibold text-slate-700
                          bg-slate-100 hover:bg-slate-200 border border-slate-200
-                         transition-all duration-200 active:scale-95">
-            Cancel
-          </button>
-
+                         transition-all duration-200 active:scale-95">Cancel</button>
           <button type="submit"
                   class="px-8 py-3 rounded-xl
                          bg-gradient-to-r from-[#6A2C8A] via-[#8B1E7E] to-[#C43A7A]
@@ -1495,18 +1394,16 @@ $totalGrievances = count($grievances);
                          text-white font-bold shadow-lg shadow-purple-500/30 hover:shadow-purple-500/50
                          transition-all duration-300 hover:-translate-y-0.5 active:scale-95
                          flex items-center justify-center gap-2">
-            <i data-lucide="save" class="w-4 h-4"></i>
-            <span>Save Changes</span>
+            <i data-lucide="save" class="w-4 h-4"></i><span>Save Changes</span>
           </button>
         </div>
 
       </form>
-
     </div>
   </div>
 
   <!-- ============================================================ -->
-  <!-- DISPOSE CONFIRMATION MODAL (X THEME)                          -->
+  <!-- DISPOSE CONFIRMATION MODAL                                    -->
   <!-- ============================================================ -->
   <div id="disposeConfirmModal" class="hidden fixed inset-0 z-[70] flex items-center justify-center p-4">
     <div class="absolute inset-0 bg-black/50 backdrop-blur-sm" onclick="closeDisposeModal()"></div>
@@ -1521,15 +1418,12 @@ $totalGrievances = count($grievances);
                     bg-gradient-to-br from-red-100 to-rose-100 ring-4 ring-red-50">
           <i data-lucide="x" class="w-8 h-8 text-red-500"></i>
         </div>
-
         <h3 class="text-xl font-bold text-slate-800 mb-2">Dispose Grievance?</h3>
-
         <p class="text-sm text-slate-500 leading-relaxed">
           You are about to mark
           <span id="disposeGrievanceNumber" class="font-bold text-[#8B1E7E] break-words">this grievance</span>
           as <strong class="text-red-600">Disposed</strong>.
         </p>
-
         <p class="text-xs text-amber-600 font-medium mt-3 flex items-center gap-1.5">
           <i data-lucide="alert-triangle" class="w-3.5 h-3.5"></i>
           The grievance committee will be notified.
@@ -1542,13 +1436,10 @@ $totalGrievances = count($grievances);
         <input type="hidden" name="csrf_token" value="<?= e($csrfToken) ?>" />
         <input type="hidden" name="action" value="dispose_grievance" />
 
-        <button type="button"
-                onclick="closeDisposeModal()"
+        <button type="button" onclick="closeDisposeModal()"
                 class="flex-1 px-5 py-3 rounded-xl font-semibold text-slate-700
                        bg-slate-100 hover:bg-slate-200 border border-slate-200
-                       transition-all duration-200 active:scale-95">
-          Cancel
-        </button>
+                       transition-all duration-200 active:scale-95">Cancel</button>
 
         <button type="submit"
                 class="flex-1 px-5 py-3 rounded-xl font-bold text-white
@@ -1557,16 +1448,14 @@ $totalGrievances = count($grievances);
                        shadow-lg shadow-red-500/30 hover:shadow-red-500/50
                        transition-all duration-300 hover:-translate-y-0.5 active:scale-95
                        flex items-center justify-center gap-2">
-          <i data-lucide="x" class="w-4 h-4"></i>
-          <span>Dispose</span>
+          <i data-lucide="x" class="w-4 h-4"></i><span>Dispose</span>
         </button>
       </form>
-
     </div>
   </div>
 
   <!-- ============================================================ -->
-  <!-- VIEW GRIEVANCE MODAL (with attachment preview)                -->
+  <!-- VIEW GRIEVANCE MODAL (with in-page image preview)             -->
   <!-- ============================================================ -->
   <div id="viewGrievanceModal" class="hidden fixed inset-0 z-[60] flex items-center justify-center p-4">
     <div class="absolute inset-0 bg-black/40 backdrop-blur-sm" onclick="closeViewGrievanceModal()"></div>
@@ -1634,6 +1523,7 @@ $totalGrievances = count($grievances);
             </div>
 
             <div class="flex flex-wrap items-center gap-2">
+              <!-- In-page preview button (image / pdf) -->
               <button type="button" id="vgPreviewBtn"
                       onclick="openPreviewOverlay()"
                       class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-bold
@@ -1644,6 +1534,7 @@ $totalGrievances = count($grievances);
                 <span id="vgPreviewBtnLabel">View Image</span>
               </button>
 
+              <!-- Download / open-in-tab fallback -->
               <a id="vgDownloadLink" href="#" target="_blank" rel="noopener"
                  class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-bold
                         bg-white hover:bg-slate-100 text-[#4A154B]
@@ -1670,16 +1561,14 @@ $totalGrievances = count($grievances);
         <button type="button" onclick="closeViewGrievanceModal()"
                 class="px-5 py-2.5 rounded-xl font-semibold text-slate-700
                        bg-white hover:bg-slate-100 border border-slate-200
-                       transition-all duration-200 active:scale-95">
-          Close
-        </button>
+                       transition-all duration-200 active:scale-95">Close</button>
       </div>
 
     </div>
   </div>
 
   <!-- ============================================================ -->
-  <!-- IN-PAGE PREVIEW OVERLAY (sits above View modal)               -->
+  <!-- IN-PAGE PREVIEW OVERLAY (sits above the View modal)           -->
   <!-- ============================================================ -->
   <div id="previewOverlay" class="hidden fixed inset-0 z-[80] flex items-center justify-center p-4">
     <div class="absolute inset-0 bg-black/80 backdrop-blur-md" onclick="closePreviewOverlay()"></div>
@@ -1737,15 +1626,12 @@ $totalGrievances = count($grievances);
                     bg-gradient-to-br from-rose-100 to-pink-100 ring-4 ring-rose-50">
           <i data-lucide="rotate-ccw" class="w-8 h-8 text-rose-500"></i>
         </div>
-
         <h3 class="text-xl font-bold text-slate-800 mb-2">Reopen Grievance?</h3>
-
         <p class="text-sm text-slate-500 leading-relaxed">
           You are about to reopen
           <span id="reopenGrievanceNumber" class="font-bold text-[#8B1E7E] break-words">this grievance</span>.
           It will be sent back to the grievance committee for review.
         </p>
-
         <p class="text-xs text-amber-600 font-medium mt-3 flex items-center gap-1.5">
           <i data-lucide="alert-triangle" class="w-3.5 h-3.5"></i>
           Only reopen if the issue is not resolved.
@@ -1757,13 +1643,10 @@ $totalGrievances = count($grievances);
         <input type="hidden" name="grievance_id" id="reopenGrievanceId" value="" />
         <input type="hidden" name="csrf_token" value="<?= e($csrfToken) ?>" />
 
-        <button type="button"
-                onclick="closeReopenModal()"
+        <button type="button" onclick="closeReopenModal()"
                 class="flex-1 px-5 py-3 rounded-xl font-semibold text-slate-700
                        bg-slate-100 hover:bg-slate-200 border border-slate-200
-                       transition-all duration-200 active:scale-95">
-          Cancel
-        </button>
+                       transition-all duration-200 active:scale-95">Cancel</button>
 
         <button type="submit"
                 class="flex-1 px-5 py-3 rounded-xl font-bold text-white
@@ -1772,16 +1655,14 @@ $totalGrievances = count($grievances);
                        shadow-lg shadow-rose-500/30 hover:shadow-rose-500/50
                        transition-all duration-300 hover:-translate-y-0.5 active:scale-95
                        flex items-center justify-center gap-2">
-          <i data-lucide="rotate-ccw" class="w-4 h-4"></i>
-          <span>Reopen</span>
+          <i data-lucide="rotate-ccw" class="w-4 h-4"></i><span>Reopen</span>
         </button>
       </form>
-
     </div>
   </div>
 
   <!-- ============================================================= -->
-  <!-- CUSTOM LOGOUT CONFIRMATION MODAL                              -->
+  <!-- LOGOUT CONFIRMATION MODAL                                     -->
   <!-- ============================================================= -->
   <div id="logoutConfirmModal" class="hidden fixed inset-0 z-[70] flex items-center justify-center p-4">
     <div class="absolute inset-0 bg-black/50 backdrop-blur-sm" onclick="closeLogoutModal()"></div>
@@ -1796,15 +1677,12 @@ $totalGrievances = count($grievances);
                     bg-gradient-to-br from-red-100 to-pink-100 ring-4 ring-red-50">
           <i data-lucide="log-out" class="w-8 h-8 text-red-500"></i>
         </div>
-
         <h3 class="text-xl font-bold text-slate-800 mb-2">Log Out?</h3>
-
         <p class="text-sm text-slate-500 leading-relaxed">
           You are about to log out of
           <span class="font-bold text-[#8B1E7E] break-words"><?= e($displayName) ?></span>.
           Any unsaved changes will be lost.
         </p>
-
         <p class="text-xs text-slate-400 font-medium mt-3 flex items-center gap-1.5">
           <i data-lucide="info" class="w-3.5 h-3.5"></i>
           You can log back in anytime.
@@ -1812,27 +1690,21 @@ $totalGrievances = count($grievances);
       </div>
 
       <div class="px-6 py-5 mt-2 flex flex-col-reverse sm:flex-row gap-3">
-        <button type="button"
-                onclick="closeLogoutModal()"
+        <button type="button" onclick="closeLogoutModal()"
                 class="flex-1 px-5 py-3 rounded-xl font-semibold text-slate-700
                        bg-slate-100 hover:bg-slate-200 border border-slate-200
-                       transition-all duration-200 active:scale-95">
-          Cancel
-        </button>
+                       transition-all duration-200 active:scale-95">Cancel</button>
 
-        <button type="button"
-                id="confirmLogoutBtn"
+        <button type="button" id="confirmLogoutBtn"
                 class="flex-1 px-5 py-3 rounded-xl font-bold text-white
                        bg-gradient-to-r from-red-500 via-red-600 to-rose-600
                        hover:from-red-600 hover:via-red-700 hover:to-rose-700
                        shadow-lg shadow-red-500/30 hover:shadow-red-500/50
                        transition-all duration-300 hover:-translate-y-0.5 active:scale-95
                        flex items-center justify-center gap-2">
-          <i data-lucide="log-out" class="w-4 h-4"></i>
-          <span>Log Out</span>
+          <i data-lucide="log-out" class="w-4 h-4"></i><span>Log Out</span>
         </button>
       </div>
-
     </div>
   </div>
 
@@ -1859,8 +1731,8 @@ $totalGrievances = count($grievances);
     // ============================================================
     (function () {
       const toggleBtn = document.getElementById('sidebarToggle');
-      const sidebar   = document.getElementById('studentSidebar');
-      const main      = document.getElementById('studentMain');
+      const sidebar   = document.getElementById('staffSidebar');
+      const main      = document.getElementById('staffMain');
       if (!toggleBtn || !sidebar || !main) return;
 
       const labels   = sidebar.querySelectorAll('.sidebar-label');
@@ -1876,43 +1748,29 @@ $totalGrievances = count($grievances);
           sidebar.classList.add('w-64');
           main.classList.remove('ml-20');
           main.classList.add('ml-64');
-
-          labels.forEach(function (el) {
-            el.classList.remove('opacity-0', 'w-0');
-            el.classList.add('opacity-100', 'w-auto');
-          });
-          tooltips.forEach(function (el) {
-            el.classList.add('hidden');
-          });
+          labels.forEach(function (el) { el.classList.remove('opacity-0', 'w-0'); el.classList.add('opacity-100', 'w-auto'); });
+          tooltips.forEach(function (el) { el.classList.add('hidden'); });
         } else {
           sidebar.classList.add('w-20');
           sidebar.classList.remove('w-64');
           main.classList.add('ml-20');
           main.classList.remove('ml-64');
-
-          labels.forEach(function (el) {
-            el.classList.add('opacity-0', 'w-0');
-            el.classList.remove('opacity-100', 'w-auto');
-          });
-          tooltips.forEach(function (el) {
-            el.classList.remove('hidden');
-          });
+          labels.forEach(function (el) { el.classList.add('opacity-0', 'w-0'); el.classList.remove('opacity-100', 'w-auto'); });
+          tooltips.forEach(function (el) { el.classList.remove('hidden'); });
         }
 
-        setTimeout(function () {
-          if (typeof lucide !== 'undefined') lucide.createIcons();
-        }, 250);
+        setTimeout(function () { if (typeof lucide !== 'undefined') lucide.createIcons(); }, 250);
       });
     })();
 
     // ============================================================
-    // STUDENT PROFILE DROPDOWN
+    // STAFF PROFILE DROPDOWN
     // ============================================================
     (function () {
-      const btn       = document.getElementById('student-dropdown-btn');
-      const menu      = document.getElementById('student-dropdown-menu');
-      const chevron   = document.getElementById('student-chevron');
-      const container = document.getElementById('student-dropdown-container');
+      const btn       = document.getElementById('staff-dropdown-btn');
+      const menu      = document.getElementById('staff-dropdown-menu');
+      const chevron   = document.getElementById('staff-chevron');
+      const container = document.getElementById('staff-dropdown-container');
 
       if (!btn || !menu || !container) return;
 
@@ -2079,7 +1937,7 @@ $totalGrievances = count($grievances);
     }
 
     // ============================================================
-    // DISPOSE CONFIRMATION MODAL (X Theme)
+    // DISPOSE CONFIRMATION MODAL
     // ============================================================
     const disposeConfirmModal = document.getElementById('disposeConfirmModal');
     const disposeConfirmPanel = document.getElementById('disposeConfirmPanel');
@@ -2120,7 +1978,7 @@ $totalGrievances = count($grievances);
     const previewFileName    = document.getElementById('previewFileName');
     const previewOpenNewTab  = document.getElementById('previewOpenNewTab');
 
-    // Currently loaded attachment path (relative to student/)
+    // Currently loaded attachment path (relative to staff/)
     let currentAttachmentPath = '';
     let currentAttachmentUrl  = '';
     let currentAttachmentExt  = '';
@@ -2139,6 +1997,7 @@ $totalGrievances = count($grievances);
       return '<span class="inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider border ' + cls + '">' + s + '</span>';
     }
 
+    // Detect whether a file is previewable inline (image or PDF)
     function isImageExt(ext) {
       return ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg'].indexOf(ext) !== -1;
     }
@@ -2166,7 +2025,7 @@ $totalGrievances = count($grievances);
       const attPath = (attachment || '').trim();
 
       if (attPath !== '' && attWrapper) {
-        // student/ is one level below project root → prefix with ../
+        // staff/ is one level below project root → prefix with ../
         const cleaned = attPath.replace(/^\/+/, '');
         const url     = '../' + cleaned;
 
@@ -2182,6 +2041,7 @@ $totalGrievances = count($grievances);
         attName.textContent  = fname;
         attDownload.href     = url;
 
+        // Button label + visibility
         if (isImageExt(ext)) {
           attPreviewLbl.textContent = 'View Image';
           attPreviewBtn.classList.remove('hidden');
@@ -2189,6 +2049,7 @@ $totalGrievances = count($grievances);
           attPreviewLbl.textContent = 'View PDF';
           attPreviewBtn.classList.remove('hidden');
         } else {
+          // doc/docx and other non-previewable → hide inline preview, keep download
           attPreviewBtn.classList.add('hidden');
         }
 
@@ -2207,6 +2068,7 @@ $totalGrievances = count($grievances);
     }
 
     function closeViewGrievanceModal() {
+      // Also close preview if it's open
       if (previewOverlay && !previewOverlay.classList.contains('hidden')) {
         closePreviewOverlay();
       }
@@ -2232,6 +2094,7 @@ $totalGrievances = count($grievances);
         previewImage.classList.add('hidden');
         previewImage.src = '';
       } else {
+        // Fallback — shouldn't normally reach here
         window.open(currentAttachmentUrl, '_blank', 'noopener');
         return;
       }
@@ -2243,6 +2106,7 @@ $totalGrievances = count($grievances);
     function closePreviewOverlay() {
       if (!previewOverlay) return;
       previewOverlay.classList.add('hidden');
+      // Clear sources so the browser doesn't keep the file in memory
       if (previewImage) { previewImage.src = ''; }
       if (previewFrame) { previewFrame.src = ''; }
     }
@@ -2281,7 +2145,7 @@ $totalGrievances = count($grievances);
     const logoutConfirmPanel = document.getElementById('logoutConfirmPanel');
     const confirmLogoutBtn   = document.getElementById('confirmLogoutBtn');
 
-    const LOGOUT_URL = '../logout.php?role=student';
+    const LOGOUT_URL = '../logout.php?role=staff';
 
     function openLogoutModal() {
       logoutConfirmModal.classList.remove('hidden');
@@ -2410,7 +2274,7 @@ $totalGrievances = count($grievances);
     })();
 
     // ============================================================
-    // ESCAPE KEY CLOSES ANY OPEN MODAL (preview first)
+    // ESCAPE KEY CLOSES ANY OPEN MODAL (preview first, then others)
     // ============================================================
     document.addEventListener('keydown', function (e) {
       if (e.key !== 'Escape') return;

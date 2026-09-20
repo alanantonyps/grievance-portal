@@ -117,7 +117,7 @@ require_once 'db_connect.php';
                 <i data-lucide="arrow-right" class="w-4 h-4 ml-auto opacity-0 group-hover:opacity-100 text-[#8B1E7E] transition-opacity"></i>
               </a>
               <a
-                href="login.php?role=teacher"
+                href="login.php?role=staff"
                 class="group flex items-center space-x-3 px-4 py-3 text-sm text-slate-700 hover:bg-gradient-to-r hover:from-pink-50 hover:to-purple-50 hover:text-[#8B1E7E] transition-all duration-200 border-b border-slate-50"
                 role="menuitem"
               >
@@ -188,7 +188,7 @@ require_once 'db_connect.php';
             <span>Grievance Member</span>
           </a>
           <a
-            href="login.php?role=teacher"
+            href="login.php?role=staff"
             class="flex items-center space-x-3 px-4 py-3 text-slate-700 hover:text-[#8B1E7E] hover:bg-gradient-to-r hover:from-pink-50 hover:to-purple-50 rounded-lg text-sm font-medium transition-all duration-200"
           >
             <i data-lucide="briefcase" class="w-4 h-4 text-[#8B1E7E]"></i>
@@ -360,7 +360,7 @@ require_once 'db_connect.php';
 
         <!-- Teachers & Non-Teaching Staffs Card -->
         <a
-          href="login.php?role=teacher"
+          href="login.php?role=staff"
           class="group relative bg-white rounded-2xl shadow-lg hover:shadow-2xl transition-all duration-500 overflow-hidden border-2 border-slate-100 hover:border-[#8B1E7E] portal-card"
         >
           <div class="bg-gradient-to-br from-[#4A154B] via-[#8B1E7E] to-[#E5097F] p-6 text-white relative overflow-hidden">

@@ -12,10 +12,11 @@
  *   • Grievance list table (own grievances only)
  *   • Live search + entries-per-page selector
  *   • Status badges with color coding
- *   • Create Grievance modal (with file upload)
+ *   • Create Grievance modal (with file upload → stored in uploads/grievances/)
  *   • Edit Grievance modal (only for Pending / Reopened)
  *   • Dispose Grievance action (X icon — only for Pending / In Progress / Reopened)
- *   • View details modal + Reminder/Reopen action hooks
+ *   • View details modal with in-page image/PDF preview overlay
+ *   • Reminder / Reopen action hooks
  *   • Empty state & pagination counter
  * ---------------------------------------------------------------------------
  */
@@ -142,6 +143,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($conn === null) {
             $flashError = $dbError ?: 'Database is unavailable. Please try again later.';
         } else {
+            $targetPath     = null;
+            $attachmentPath = null;
+
             try {
                 $grievanceTypeId = (int) ($_POST['grievance_type_id'] ?? 0);
                 $subject         = trim((string) ($_POST['subject']       ?? ''));
@@ -231,6 +235,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         if (!move_uploaded_file($file['tmp_name'], $targetPath)) {
                             throw new Exception('Failed to save the uploaded attachment. Please try again.');
                         }
+
+                        $attachmentPath = 'uploads/grievances/' . $newFileName;
                     } elseif ($file['error'] !== UPLOAD_ERR_NO_FILE) {
                         throw new Exception('File upload error (code ' . (int) $file['error'] . '). Please try again.');
                     }
@@ -241,8 +247,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                 $sql = "INSERT INTO grievances
                             (grievance_number, grievance_type_id, complainant_user_id,
-                             subject, description, status, created_at, updated_at)
-                        VALUES (?, ?, ?, ?, ?, ?, NOW(), NOW())";
+                             subject, description, attachment_path, status, created_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), NOW())";
 
                 $stmt = $conn->prepare($sql);
                 if (!$stmt) {
@@ -250,12 +256,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 }
 
                 $stmt->bind_param(
-                    'siisss',
+                    'siissss',
                     $grievanceNumber,
                     $grievanceTypeId,
                     $userId,
                     $subject,
                     $description,
+                    $attachmentPath,
                     $initialStatus
                 );
 
@@ -268,6 +275,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $flashSuccess = 'Grievance submitted successfully. Your reference number is ' . $grievanceNumber . '.';
 
             } catch (Throwable $ex) {
+                if (!empty($targetPath) && file_exists($targetPath)) {
+                    @unlink($targetPath);
+                }
                 error_log('[Parent Create Grievance] ' . $ex->getMessage());
                 $flashError = $ex->getMessage() ?: 'A system error occurred while submitting your grievance.';
             }
@@ -545,7 +555,7 @@ if ($conn instanceof mysqli) {
 }
 
 // ---------------------------------------------------------------------------
-// 10. FETCH PARENT'S GRIEVANCES
+// 10. FETCH PARENT'S GRIEVANCES (with type join + attachment_path)
 // ---------------------------------------------------------------------------
 $grievances = [];
 
@@ -555,6 +565,7 @@ if ($conn instanceof mysqli) {
                         g.grievance_number,
                         g.subject,
                         g.description,
+                        g.attachment_path,
                         g.status,
                         g.reply_details,
                         g.created_at,
@@ -654,9 +665,7 @@ $totalGrievances = count($grievances);
 
   <div class="flex min-h-screen flex-1">
 
-    <!-- ============================================================
-         SIDEBAR — Collapsible
-         ============================================================ -->
+    <!-- SIDEBAR -->
     <aside id="parentSidebar"
            class="w-20 bg-gradient-to-b from-[#4A154B] via-[#5A1B5C] to-[#006837]
                   flex flex-col py-4 shadow-2xl fixed inset-y-0 left-0 z-40
@@ -740,12 +749,10 @@ $totalGrievances = count($grievances);
 
     </aside>
 
-    <!-- ============================================================
-         MAIN CONTENT WRAPPER
-         ============================================================ -->
+    <!-- MAIN CONTENT WRAPPER -->
     <div id="parentMain" class="flex-1 ml-20 flex flex-col min-h-screen transition-all duration-300">
 
-      <!-- ============ TOP HEADER ============ -->
+      <!-- TOP HEADER -->
       <header class="bg-white border-b border-slate-200 shadow-sm sticky top-0 z-30">
         <div class="flex items-center justify-between px-6 py-4">
 
@@ -856,7 +863,7 @@ $totalGrievances = count($grievances);
         </div>
       </header>
 
-      <!-- ============ PAGE CONTENT ============ -->
+      <!-- PAGE CONTENT -->
       <main class="flex-1 px-6 py-8">
 
         <?php if ($dbError): ?>
@@ -1005,6 +1012,7 @@ $totalGrievances = count($grievances);
                       $gSubject    = (string) ($row['subject']          ?? '—');
                       $gDesc       = (string) ($row['description']      ?? '');
                       $gReply      = (string) ($row['reply_details']    ?? '');
+                      $gAttachment = (string) ($row['attachment_path']  ?? '');
                       $gStatus     = (string) ($row['status']           ?? 'Pending');
                       $gCreated    = !empty($row['created_at']) ? date('d M y', strtotime((string) $row['created_at'])) : '—';
 
@@ -1039,11 +1047,9 @@ $totalGrievances = count($grievances);
                         <?= statusBadge($gStatus) ?>
                       </td>
 
-                      <!-- Actions: View | Edit | Dispose -->
                       <td class="px-2 py-4">
                         <div class="flex items-center justify-center gap-1">
 
-                          <!-- View -->
                           <button type="button"
                                   title="View grievance"
                                   onclick='openViewGrievanceModal(
@@ -1053,7 +1059,8 @@ $totalGrievances = count($grievances);
                                       <?= json_encode($gDesc) ?>,
                                       <?= json_encode($gStatus) ?>,
                                       <?= json_encode($gReply) ?>,
-                                      <?= json_encode($gCreated) ?>
+                                      <?= json_encode($gCreated) ?>,
+                                      <?= json_encode($gAttachment) ?>
                                   )'
                                   class="w-7 h-7 rounded-full bg-purple-50 hover:bg-[#4A154B]
                                          inline-flex items-center justify-center text-[#4A154B] hover:text-white
@@ -1061,7 +1068,6 @@ $totalGrievances = count($grievances);
                             <i data-lucide="eye" class="w-3.5 h-3.5"></i>
                           </button>
 
-                          <!-- Edit (Pending / Reopened only) -->
                           <?php if ($canEdit): ?>
                             <button type="button"
                                     title="Edit grievance"
@@ -1078,7 +1084,6 @@ $totalGrievances = count($grievances);
                             </button>
                           <?php endif; ?>
 
-                          <!-- Dispose (X icon) -->
                           <?php if ($canDispose): ?>
                             <button type="button"
                                     title="Dispose grievance"
@@ -1093,7 +1098,6 @@ $totalGrievances = count($grievances);
                         </div>
                       </td>
 
-                      <!-- Remainder / Reopen -->
                       <td class="px-2 py-4 text-center">
                         <?php if ($canRemind): ?>
                           <form method="POST" action="send_reminder.php" class="inline">
@@ -1173,7 +1177,7 @@ $totalGrievances = count($grievances);
 
       </main>
 
-      <!-- ============ FOOTER ============ -->
+      <!-- FOOTER -->
       <footer class="bg-gradient-to-r from-purple-200 via-pink-100 to-purple-200 border-t border-purple-200/60 mt-auto">
         <div class="px-6 py-6">
           <div class="max-w-7xl mx-auto">
@@ -1502,7 +1506,7 @@ $totalGrievances = count($grievances);
   </div>
 
   <!-- ============================================================ -->
-  <!-- DISPOSE CONFIRMATION MODAL (X THEME)                          -->
+  <!-- DISPOSE CONFIRMATION MODAL                                    -->
   <!-- ============================================================ -->
   <div id="disposeConfirmModal" class="hidden fixed inset-0 z-[70] flex items-center justify-center p-4">
     <div class="absolute inset-0 bg-black/50 backdrop-blur-sm" onclick="closeDisposeModal()"></div>
@@ -1562,7 +1566,7 @@ $totalGrievances = count($grievances);
   </div>
 
   <!-- ============================================================ -->
-  <!-- VIEW GRIEVANCE MODAL                                          -->
+  <!-- VIEW GRIEVANCE MODAL (with attachment preview)                -->
   <!-- ============================================================ -->
   <div id="viewGrievanceModal" class="hidden fixed inset-0 z-[60] flex items-center justify-center p-4">
     <div class="absolute inset-0 bg-black/40 backdrop-blur-sm" onclick="closeViewGrievanceModal()"></div>
@@ -1616,6 +1620,43 @@ $totalGrievances = count($grievances);
           </div>
         </div>
 
+        <!-- Attachment Section (with in-page preview) -->
+        <div id="vgAttachmentWrapper" class="hidden">
+          <p class="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1.5">Attachment</p>
+
+          <div class="bg-purple-50 rounded-xl p-4 border border-purple-100 space-y-3">
+
+            <div class="flex flex-wrap items-center gap-2">
+              <span class="inline-flex items-center gap-1.5 text-xs font-semibold text-purple-900">
+                <i data-lucide="paperclip" class="w-3.5 h-3.5"></i>
+                <span id="vgAttachmentName" class="break-all">attachment</span>
+              </span>
+            </div>
+
+            <div class="flex flex-wrap items-center gap-2">
+              <button type="button" id="vgPreviewBtn"
+                      onclick="openPreviewOverlay()"
+                      class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-bold
+                             bg-[#4A154B] hover:bg-[#5A1B5C] text-white
+                             shadow-md shadow-purple-500/20
+                             transition-all duration-200 hover:-translate-y-0.5 active:scale-95">
+                <i data-lucide="eye" class="w-3.5 h-3.5"></i>
+                <span id="vgPreviewBtnLabel">View Image</span>
+              </button>
+
+              <a id="vgDownloadLink" href="#" target="_blank" rel="noopener"
+                 class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-bold
+                        bg-white hover:bg-slate-100 text-[#4A154B]
+                        border-2 border-[#4A154B]/20 hover:border-[#4A154B]/40
+                        transition-all duration-200 hover:-translate-y-0.5 active:scale-95">
+                <i data-lucide="download" class="w-3.5 h-3.5"></i>
+                <span>Download</span>
+              </a>
+            </div>
+
+          </div>
+        </div>
+
         <div>
           <p class="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1.5">Reply / Response</p>
           <div class="bg-emerald-50 rounded-xl p-4 border border-emerald-100">
@@ -1632,6 +1673,47 @@ $totalGrievances = count($grievances);
                        transition-all duration-200 active:scale-95">
           Close
         </button>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- IN-PAGE PREVIEW OVERLAY (sits above View modal)               -->
+  <!-- ============================================================ -->
+  <div id="previewOverlay" class="hidden fixed inset-0 z-[80] flex items-center justify-center p-4">
+    <div class="absolute inset-0 bg-black/80 backdrop-blur-md" onclick="closePreviewOverlay()"></div>
+
+    <div class="relative w-full max-w-5xl max-h-[92vh] bg-slate-900 rounded-2xl shadow-2xl
+                animate-modal-in overflow-hidden flex flex-col">
+
+      <div class="flex items-center justify-between px-5 py-3 bg-slate-800 border-b border-slate-700">
+        <div class="flex items-center gap-2 min-w-0">
+          <i data-lucide="image" class="w-4 h-4 text-purple-300 flex-shrink-0"></i>
+          <p id="previewFileName" class="text-sm font-semibold text-slate-100 truncate">Attachment</p>
+        </div>
+
+        <div class="flex items-center gap-2 flex-shrink-0">
+          <a id="previewOpenNewTab" href="#" target="_blank" rel="noopener"
+             class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold
+                    bg-slate-700 hover:bg-slate-600 text-slate-100 transition-colors">
+            <i data-lucide="external-link" class="w-3.5 h-3.5"></i>
+            <span>Open in new tab</span>
+          </a>
+          <button type="button" onclick="closePreviewOverlay()"
+                  class="w-8 h-8 rounded-lg bg-slate-700 hover:bg-red-500
+                         flex items-center justify-center text-slate-100 transition-colors"
+                  aria-label="Close preview">
+            <i data-lucide="x" class="w-4 h-4"></i>
+          </button>
+        </div>
+      </div>
+
+      <div class="flex-1 overflow-auto bg-black/40 flex items-center justify-center p-4">
+        <img id="previewImage" src="" alt="Attachment preview"
+             class="max-w-full max-h-[80vh] object-contain rounded-lg shadow-2xl hidden" />
+        <iframe id="previewFrame" src="" title="Attachment preview"
+                class="w-full h-[80vh] rounded-lg bg-white hidden"></iframe>
       </div>
 
     </div>
@@ -1991,7 +2073,7 @@ $totalGrievances = count($grievances);
     }
 
     // ============================================================
-    // DISPOSE CONFIRMATION MODAL (X Theme)
+    // DISPOSE CONFIRMATION MODAL
     // ============================================================
     const disposeConfirmModal = document.getElementById('disposeConfirmModal');
     const disposeConfirmPanel = document.getElementById('disposeConfirmPanel');
@@ -2023,9 +2105,20 @@ $totalGrievances = count($grievances);
     }
 
     // ============================================================
-    // VIEW GRIEVANCE MODAL
+    // VIEW GRIEVANCE MODAL + IN-PAGE PREVIEW
     // ============================================================
     const viewGrievanceModal = document.getElementById('viewGrievanceModal');
+    const previewOverlay     = document.getElementById('previewOverlay');
+    const previewImage       = document.getElementById('previewImage');
+    const previewFrame       = document.getElementById('previewFrame');
+    const previewFileName    = document.getElementById('previewFileName');
+    const previewOpenNewTab  = document.getElementById('previewOpenNewTab');
+
+    // Currently loaded attachment path (relative to parent/)
+    let currentAttachmentPath = '';
+    let currentAttachmentUrl  = '';
+    let currentAttachmentExt  = '';
+    let currentAttachmentName = '';
 
     function statusBadgeHtml(status) {
       const s = (status || '').trim();
@@ -2040,7 +2133,14 @@ $totalGrievances = count($grievances);
       return '<span class="inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider border ' + cls + '">' + s + '</span>';
     }
 
-    function openViewGrievanceModal(number, type, subject, description, status, reply, date) {
+    function isImageExt(ext) {
+      return ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg'].indexOf(ext) !== -1;
+    }
+    function isPdfExt(ext) {
+      return ext === 'pdf';
+    }
+
+    function openViewGrievanceModal(number, type, subject, description, status, reply, date, attachment) {
       document.getElementById('vgNumber').textContent     = number || '—';
       document.getElementById('vgSubject').textContent    = subject || '—';
       document.getElementById('vgStatus').innerHTML       = statusBadgeHtml(status);
@@ -2050,14 +2150,95 @@ $totalGrievances = count($grievances);
       document.getElementById('vgDescription').textContent = (description && description.trim() !== '') ? description : 'No description provided.';
       document.getElementById('vgReply').textContent      = (reply && reply.trim() !== '') ? reply : 'No response yet from the grievance committee.';
 
+      // ---- Attachment ----
+      const attWrapper    = document.getElementById('vgAttachmentWrapper');
+      const attName       = document.getElementById('vgAttachmentName');
+      const attPreviewBtn = document.getElementById('vgPreviewBtn');
+      const attPreviewLbl = document.getElementById('vgPreviewBtnLabel');
+      const attDownload   = document.getElementById('vgDownloadLink');
+
+      const attPath = (attachment || '').trim();
+
+      if (attPath !== '' && attWrapper) {
+        // parent/ is one level below project root → prefix with ../
+        const cleaned = attPath.replace(/^\/+/, '');
+        const url     = '../' + cleaned;
+
+        const parts = cleaned.split('/');
+        const fname = parts[parts.length - 1] || 'attachment';
+        const ext   = (fname.split('.').pop() || '').toLowerCase();
+
+        currentAttachmentPath = cleaned;
+        currentAttachmentUrl  = url;
+        currentAttachmentExt  = ext;
+        currentAttachmentName = fname;
+
+        attName.textContent  = fname;
+        attDownload.href     = url;
+
+        if (isImageExt(ext)) {
+          attPreviewLbl.textContent = 'View Image';
+          attPreviewBtn.classList.remove('hidden');
+        } else if (isPdfExt(ext)) {
+          attPreviewLbl.textContent = 'View PDF';
+          attPreviewBtn.classList.remove('hidden');
+        } else {
+          attPreviewBtn.classList.add('hidden');
+        }
+
+        attWrapper.classList.remove('hidden');
+      } else {
+        currentAttachmentPath = '';
+        currentAttachmentUrl  = '';
+        currentAttachmentExt  = '';
+        currentAttachmentName = '';
+        if (attWrapper) attWrapper.classList.add('hidden');
+      }
+
       viewGrievanceModal.classList.remove('hidden');
       document.body.classList.add('overflow-hidden');
       if (typeof lucide !== 'undefined') lucide.createIcons();
     }
 
     function closeViewGrievanceModal() {
+      if (previewOverlay && !previewOverlay.classList.contains('hidden')) {
+        closePreviewOverlay();
+      }
       viewGrievanceModal.classList.add('hidden');
       document.body.classList.remove('overflow-hidden');
+    }
+
+    // ---- In-page preview overlay ----
+    function openPreviewOverlay() {
+      if (!currentAttachmentUrl) return;
+
+      previewFileName.textContent = currentAttachmentName || 'Attachment';
+      previewOpenNewTab.href      = currentAttachmentUrl;
+
+      if (isImageExt(currentAttachmentExt)) {
+        previewImage.src = currentAttachmentUrl;
+        previewImage.classList.remove('hidden');
+        previewFrame.classList.add('hidden');
+        previewFrame.src = '';
+      } else if (isPdfExt(currentAttachmentExt)) {
+        previewFrame.src = currentAttachmentUrl;
+        previewFrame.classList.remove('hidden');
+        previewImage.classList.add('hidden');
+        previewImage.src = '';
+      } else {
+        window.open(currentAttachmentUrl, '_blank', 'noopener');
+        return;
+      }
+
+      previewOverlay.classList.remove('hidden');
+      if (typeof lucide !== 'undefined') lucide.createIcons();
+    }
+
+    function closePreviewOverlay() {
+      if (!previewOverlay) return;
+      previewOverlay.classList.add('hidden');
+      if (previewImage) { previewImage.src = ''; }
+      if (previewFrame) { previewFrame.src = ''; }
     }
 
     // ============================================================
@@ -2223,10 +2404,16 @@ $totalGrievances = count($grievances);
     })();
 
     // ============================================================
-    // ESCAPE KEY CLOSES ANY OPEN MODAL
+    // ESCAPE KEY CLOSES ANY OPEN MODAL (preview first)
     // ============================================================
     document.addEventListener('keydown', function (e) {
       if (e.key !== 'Escape') return;
+
+      if (previewOverlay && !previewOverlay.classList.contains('hidden')) {
+        closePreviewOverlay();
+        return;
+      }
+
       if (createGrievanceModal && !createGrievanceModal.classList.contains('hidden')) closeCreateGrievanceModal();
       if (editGrievanceModal && !editGrievanceModal.classList.contains('hidden')) closeEditGrievanceModal();
       if (disposeConfirmModal && !disposeConfirmModal.classList.contains('hidden')) closeDisposeModal();

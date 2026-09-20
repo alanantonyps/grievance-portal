@@ -8,13 +8,14 @@
  * Database strategy:
  *   Pending users are stored in the `users` table with status = 'Pending'.
  *   Profile details are resolved by joining role-specific tables:
- *     - STUDENT               → students
- *     - PARENT                → parents
- *     - TEACHER / NON_TEACHING / MANAGEMENT → cell_members
+ *     - STUDENT                        → students
+ *     - PARENT                         → parents
+ *     - TEACHER / NON_TEACHING         → staff
+ *     - MANAGEMENT                     → cell_members
  *
  * Features:
  *   • Lists pending registrations with live search
- *   • Approve single / approve-bulk (checkbox) 
+ *   • Approve single / approve-bulk (checkbox)
  *   • Edit profile details (per role table)
  *   • Delete registration permanently
  *   • Themed modals & flash messages (auto-dismiss after 3 seconds)
@@ -207,16 +208,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $conn instanceof mysqli) {
     }
 
     // -------- DELETE --------
+    // The FK on students/parents/staff/cell_members is ON DELETE CASCADE,
+    // so deleting from `users` is enough. But we still clean up explicitly
+    // for safety (e.g. if some table lacks cascade).
     if ($action === 'delete_registration') {
         $targetUserId = (int) ($_POST['user_id'] ?? 0);
         if ($targetUserId > 0) {
             try {
                 $conn->begin_transaction();
 
-                // Clear role-specific rows first (FK is ON DELETE CASCADE, but be explicit)
-                $conn->query("DELETE FROM students     WHERE user_id = " . $targetUserId);
-                $conn->query("DELETE FROM parents      WHERE user_id = " . $targetUserId);
-                $conn->query("DELETE FROM cell_members WHERE user_id = " . $targetUserId);
+                $stmt = $conn->prepare("DELETE FROM students     WHERE user_id = ?");
+                $stmt->bind_param('i', $targetUserId); $stmt->execute(); $stmt->close();
+
+                $stmt = $conn->prepare("DELETE FROM parents      WHERE user_id = ?");
+                $stmt->bind_param('i', $targetUserId); $stmt->execute(); $stmt->close();
+
+                $stmt = $conn->prepare("DELETE FROM staff        WHERE user_id = ?");
+                $stmt->bind_param('i', $targetUserId); $stmt->execute(); $stmt->close();
+
+                $stmt = $conn->prepare("DELETE FROM cell_members WHERE user_id = ?");
+                $stmt->bind_param('i', $targetUserId); $stmt->execute(); $stmt->close();
 
                 $stmt = $conn->prepare("DELETE FROM users WHERE id = ?");
                 $stmt->bind_param('i', $targetUserId);
@@ -239,7 +250,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $conn instanceof mysqli) {
         $name         = trim((string) ($_POST['name']    ?? ''));
         $email        = trim((string) ($_POST['email']   ?? ''));
         $address      = trim((string) ($_POST['address'] ?? ''));
-        $role         = trim((string) ($_POST['role']    ?? ''));
+        $role         = strtoupper(trim((string) ($_POST['role'] ?? '')));
 
         if ($targetUserId <= 0) {
             $flashError = 'Invalid registration.';
@@ -267,8 +278,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $conn instanceof mysqli) {
                     $stmt->execute();
                     $updated = $stmt->affected_rows >= 0;
                     $stmt->close();
+                } elseif ($role === 'TEACHER' || $role === 'NON_TEACHING') {
+                    // Teaching & Non-Teaching staff live in `staff`
+                    $stmt = $conn->prepare("UPDATE staff SET name = ?, email = ? WHERE user_id = ?");
+                    $stmt->bind_param('ssi', $name, $email, $targetUserId);
+                    $stmt->execute();
+                    $updated = $stmt->affected_rows >= 0;
+                    $stmt->close();
+
+                    // Keep cell_members row in sync if one exists (committee member)
+                    $sync = $conn->prepare("UPDATE cell_members SET name = ?, email = ? WHERE user_id = ?");
+                    if ($sync) {
+                        $sync->bind_param('ssi', $name, $email, $targetUserId);
+                        $sync->execute();
+                        $sync->close();
+                    }
                 } else {
-                    // TEACHER, NON_TEACHING, MANAGEMENT — all use cell_members
+                    // MANAGEMENT (or fallback) — stored in cell_members
                     $stmt = $conn->prepare("UPDATE cell_members SET name = ?, email = ? WHERE user_id = ?");
                     $stmt->bind_param('ssi', $name, $email, $targetUserId);
                     $stmt->execute();
@@ -310,6 +336,7 @@ if (!empty($_SESSION['flash_error'])) {
 
 // ---------------------------------------------------------------------------
 // 7. FETCH PENDING REGISTRATIONS
+//    Resolve profile details across students / parents / staff / cell_members.
 // ---------------------------------------------------------------------------
 $registrations = [];
 
@@ -319,12 +346,13 @@ if ($conn instanceof mysqli) {
                         u.username,
                         u.role,
                         u.status,
-                        COALESCE(s.name,   p.name,   cm.name)   AS name,
-                        COALESCE(s.email,  p.email,  cm.email)  AS email,
-                        COALESCE(s.address, 'N/A')              AS address
+                        COALESCE(s.name,   p.name,   st.name,   cm.name)   AS name,
+                        COALESCE(s.email,  p.email,  st.email,  cm.email)  AS email,
+                        COALESCE(s.address, 'N/A')                          AS address
                 FROM users u
                 LEFT JOIN students     s  ON u.id = s.user_id
                 LEFT JOIN parents      p  ON u.id = p.user_id
+                LEFT JOIN staff        st ON u.id = st.user_id
                 LEFT JOIN cell_members cm ON u.id = cm.user_id
                 WHERE u.status = 'Pending'
                 ORDER BY u.id DESC";

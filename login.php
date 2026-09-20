@@ -5,8 +5,7 @@
  * Unified Grievance Redressal Portal Login
  * Rajagiri College of Social Sciences
  *
- * Roles supported (URL param): admin | student | parent | teacher |
- *                              non_teaching | management
+ * Roles supported (URL param): admin | student | parent | staff | management
  * Usage:  login.php?role=admin
  *
  * DB role ENUM values (UPPERCASE):
@@ -17,6 +16,9 @@
  *
  * Registration is allowed only for:
  *   STUDENT | PARENT | TEACHER | NON_TEACHING
+ *
+ * NOTE: The "staff" URL key maps to BOTH the TEACHER and NON_TEACHING DB roles.
+ *       Both staff types share a single login portal and dashboard.
  * ---------------------------------------------------------------------------
  */
 
@@ -35,15 +37,15 @@ error_reporting(E_ALL);
 
 // ---------------------------------------------------------------------------
 // ROLE DASHBOARD MAP (single source of truth for redirection)
-// key   = DB role (UPPERCASE)
-// value = target dashboard path
+//   key   = DB role (UPPERCASE)
+//   value = target dashboard path
 // ---------------------------------------------------------------------------
 $roleDashboardMap = [
     'ADMIN'        => 'admin/dashboard.php',
     'STUDENT'      => 'student/dashboard.php',
     'PARENT'       => 'parent/dashboard.php',
-    'TEACHER'      => 'teacher/dashboard.php',
-    'NON_TEACHING' => 'non_teaching/dashboard.php',
+    'TEACHER'      => 'staff/dashboard.php',      // Unified staff dashboard
+    'NON_TEACHING' => 'staff/dashboard.php',      // Unified staff dashboard
     'MANAGEMENT'   => 'management/dashboard.php',
 ];
 
@@ -90,8 +92,9 @@ if (!file_exists($dbFile)) {
 // ---------------------------------------------------------------------------
 // 3. ROLE MAP
 //    key    = URL param (lowercase, used in login.php?role=xxx)
-//    value  = full configuration incl. DB role enum (UPPERCASE)
-//    'register_page' = the dedicated registration page for that role
+//    value  = full configuration
+//      - 'db_role'       : single string OR array of allowed DB roles
+//      - 'register_page' : dedicated registration page for that role
 // ---------------------------------------------------------------------------
 $roleConfig = [
     'admin' => [
@@ -139,35 +142,20 @@ $roleConfig = [
         'supportTag'    => 'Support Email',
         'register_page' => 'parent_register.php',
     ],
-    'teacher' => [
-        'db_role'       => 'TEACHER',
-        'title'         => 'Teacher Portal',
-        'subtitle'      => 'Teaching Staff Access',
-        'icon'          => 'briefcase',
-        'placeholder'   => 'Enter your Teacher Username',
-        'label'         => 'Teacher Username',
-        'notice'        => 'Verified Teaching Staff Only',
-        'image'         => 'https://images.unsplash.com/photo-1524178232363-1fb2b075b655?auto=format&fit=crop&w=800&q=80',
-        'imageTitle'    => 'Teacher Portal',
-        'imageDesc'     => 'Dedicated portal for teaching staff members',
-        'supportMail'   => 'staff.help@rajagiri.edu',
-        'supportTag'    => 'Support Email',
-        'register_page' => 'teacher_register.php',
-    ],
-    'non_teaching' => [
-        'db_role'       => 'NON_TEACHING',
-        'title'         => 'Non-Teaching Staff Portal',
-        'subtitle'      => 'Administrative & Support Staff Access',
+    'staff' => [
+        'db_role'       => ['TEACHER', 'NON_TEACHING'], // Either role logs in here
+        'title'         => 'Staff Portal',
+        'subtitle'      => 'Teaching & Non-Teaching Staff Access',
         'icon'          => 'briefcase',
         'placeholder'   => 'Enter your Staff Username',
         'label'         => 'Staff Username',
-        'notice'        => 'Verified Non-Teaching Staff Only',
-        'image'         => 'https://images.unsplash.com/photo-1521737604893-d14cc237f11d?auto=format&fit=crop&w=800&q=80',
-        'imageTitle'    => 'Non-Teaching Staff Portal',
-        'imageDesc'     => 'Dedicated portal for administrative and support staff',
+        'notice'        => 'Verified Staff Members Only',
+        'image'         => 'https://images.unsplash.com/photo-1524178232363-1fb2b075b655?auto=format&fit=crop&w=800&q=80',
+        'imageTitle'    => 'Staff Portal',
+        'imageDesc'     => 'Dedicated portal for teaching and support staff',
         'supportMail'   => 'staff.help@rajagiri.edu',
         'supportTag'    => 'Support Email',
-        'register_page' => 'non_teaching_register.php',
+        'register_page' => 'staff_register.php',
     ],
     'management' => [
         'db_role'       => 'MANAGEMENT',
@@ -187,7 +175,7 @@ $roleConfig = [
 ];
 
 // Roles allowed to register (by URL key)
-$registrationAllowedRoles = ['student', 'parent', 'teacher', 'non_teaching'];
+$registrationAllowedRoles = ['student', 'parent', 'staff'];
 
 // ---------------------------------------------------------------------------
 // 4. RESOLVE ROLE FROM QUERY STRING
@@ -228,8 +216,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $role = $roleConfig[$roleKey];
     $canRegister = in_array($roleKey, $registrationAllowedRoles, true);
 
-    // IMPORTANT: Convert to uppercase to match DB ENUM ('ADMIN', 'STUDENT', ...)
-    $dbRole = strtoupper((string) $role['db_role']);
+    // ---- Normalize the allowed DB roles to an array of UPPERCASE strings ----
+    $allowedDbRoles = is_array($role['db_role'])
+        ? array_map('strtoupper', $role['db_role'])
+        : [strtoupper((string) $role['db_role'])];
 
     $loginInput = $username;
 
@@ -269,11 +259,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $user = $result->fetch_assoc();
 
                     // Normalize DB values
-                    $dbUserRole     = strtoupper((string) ($user['role']   ?? ''));
-                    $dbUserStatus   = ucfirst(strtolower((string) ($user['status'] ?? '')));
+                    $dbUserRole   = strtoupper((string) ($user['role']   ?? ''));
+                    $dbUserStatus = ucfirst(strtolower((string) ($user['status'] ?? '')));
 
-                    // ---- Role match check ----
-                    if ($dbUserRole !== $dbRole) {
+                    // ---- Role match check (supports arrays for unified portals) ----
+                    if (!in_array($dbUserRole, $allowedDbRoles, true)) {
                         $errors[] = 'Invalid username or password for this portal.';
                     }
                     // ---- Status check (must be 'Approved') ----
@@ -540,7 +530,6 @@ function e(?string $v): string
 
             <!-- ============================================================
                  CREATE ACCOUNT SECTION (Dynamic — only for eligible roles)
-                 Uses the dedicated register page per role.
                  ============================================================ -->
             <?php if ($canRegister && !empty($role['register_page'])): ?>
               <div class="mt-6 pt-6 border-t border-slate-100">

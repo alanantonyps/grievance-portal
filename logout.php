@@ -6,6 +6,14 @@
  *
  * Destroys the current session and redirects to the appropriate login page.
  * Optionally accepts ?role=xxx to redirect to a specific login portal.
+ *
+ * Supported ?role= keys (match the keys used in login.php):
+ *   admin | student | parent | staff | management
+ *
+ * Notes:
+ *   • 'staff' maps internally to the TEACHER + NON_TEACHING roles in login.php,
+ *     so we allow both 'staff' (portal key) and the raw DB role names here to
+ *     keep old bookmarks / in-flight links working.
  * ---------------------------------------------------------------------------
  */
 
@@ -28,7 +36,21 @@ if ($role === '' && !empty($_SESSION['role'])) {
 }
 
 // ---------------------------------------------------------------------------
-// 3. CLEAR ALL SESSION DATA
+// 3. NORMALIZE ROLE ALIASES
+//    Map raw DB role names → login.php portal keys
+// ---------------------------------------------------------------------------
+$roleAliases = [
+    'teacher'      => 'staff',
+    'non_teaching' => 'staff',
+    'non-teaching' => 'staff',
+];
+
+if (isset($roleAliases[$role])) {
+    $role = $roleAliases[$role];
+}
+
+// ---------------------------------------------------------------------------
+// 4. CLEAR ALL SESSION DATA
 // ---------------------------------------------------------------------------
 $_SESSION = [];
 
@@ -54,9 +76,10 @@ session_unset();
 session_destroy();
 
 // ---------------------------------------------------------------------------
-// 4. REDIRECT TO APPROPRIATE LOGIN PAGE
+// 5. REDIRECT TO APPROPRIATE LOGIN PAGE
+//    These keys must match the URL keys used in login.php.
 // ---------------------------------------------------------------------------
-$allowedRoles = ['admin', 'student', 'parent', 'teacher', 'non_teaching', 'management'];
+$allowedRoles = ['admin', 'student', 'parent', 'staff', 'management'];
 
 if (in_array($role, $allowedRoles, true)) {
     header('Location: login.php?role=' . $role);
