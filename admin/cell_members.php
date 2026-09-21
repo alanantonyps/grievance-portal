@@ -2,16 +2,27 @@
 /**
  * admin/cell_members.php
  * ---------------------------------------------------------------------------
- * Admin — Grievance Cell Member List
+ * Admin — Grievance Cell Member List (All non-admin users)
  * Rajagiri College Grievance Redressal Portal
  *
- * Database schema (from grievance_db.sql):
- *   cell_members: id, user_id(NOT NULL FK), designation_id(NOT NULL FK),
- *                 department_id(NULLABLE FK), member_type(ENUM NOT NULL),
- *                 grievance_type_id(NULLABLE FK), name, email, mobile_number
+ * Lists every non-admin user in the system, joined with cell_members.
  *
- * Assigned Category (grievance_type_id) is intentionally not editable here —
- * it will be set to NULL for new members.
+ * Member Type column resolution (in priority order):
+ *   1. cell_members.member_type  (when the user IS a cell member)
+ *      • MANAGEMENT       → "MANAGEMENT"
+ *      • anything else    → "GRIEVANCE MEMBER"
+ *   2. users.role fallback (when the user is NOT a cell member):
+ *      • TEACHER          → "TEACHING"
+ *      • NON_TEACHING     → "NON TEACHING"
+ *      • MANAGEMENT       → "MANAGEMENT"
+ *      • PARENT           → "PARENT"
+ *      • STUDENT          → "STUDENT"
+ *
+ * Actions per row:
+ *   • Set Password (admin enters new + confirm password)
+ *   • Edit (cell members only)
+ *   • Deactivate
+ *   • Delete
  * ---------------------------------------------------------------------------
  */
 
@@ -82,17 +93,27 @@ function isValidMobile(string $mobile): bool
     return (bool) preg_match('/^[0-9]{10}$/', $mobile);
 }
 
-function memberTypeLabel(string $type): string
+function resolveMemberTypeLabel(?string $cellMemberType, string $userRole): string
 {
-    $map = [
-        'MANAGEMENT'       => 'MANAGEMENT',
-        'GRIEVANCE_MEMBER' => 'GRIEVANCE MEMBER',
-        'TEACHING'         => 'TEACHING',
-        'NON_TEACHING'     => 'NON TEACHING',
-        'PARENT'           => 'PARENT',
-        'STUDENT'          => 'STUDENT',
+    if ($cellMemberType !== null && $cellMemberType !== '') {
+        return $cellMemberType === 'MANAGEMENT' ? 'MANAGEMENT' : 'GRIEVANCE MEMBER';
+    }
+
+    $roleMap = [
+        'TEACHER'      => 'TEACHING',
+        'NON_TEACHING' => 'NON TEACHING',
+        'MANAGEMENT'   => 'MANAGEMENT',
+        'PARENT'       => 'PARENT',
+        'STUDENT'      => 'STUDENT',
+        'ADMIN'        => 'ADMIN',
     ];
-    return $map[$type] ?? $type;
+
+    return $roleMap[strtoupper($userRole)] ?? strtoupper($userRole);
+}
+
+function isCellMember(?string $cellMemberType): bool
+{
+    return $cellMemberType !== null && $cellMemberType !== '';
 }
 
 // ---------------------------------------------------------------------------
@@ -150,10 +171,11 @@ if (!empty($adminData['profile_picture'])) {
 }
 
 // ---------------------------------------------------------------------------
-// 6. FETCH ACTIVE DROPDOWN OPTIONS (Designations + Departments only)
+// 6. FETCH ACTIVE DROPDOWN OPTIONS
 // ---------------------------------------------------------------------------
-$designationOptions = [];
-$departmentOptions  = [];
+$designationOptions   = [];
+$departmentOptions    = [];
+$grievanceTypeOptions = [];
 
 if ($conn instanceof mysqli) {
     try {
@@ -173,6 +195,15 @@ if ($conn instanceof mysqli) {
     } catch (Throwable $ex) {
         error_log('[Fetch Departments] ' . $ex->getMessage());
     }
+
+    try {
+        $res = $conn->query("SELECT id, type_name FROM grievance_types WHERE status = 'Active' ORDER BY type_name ASC");
+        if ($res) {
+            while ($row = $res->fetch_assoc()) $grievanceTypeOptions[] = $row;
+        }
+    } catch (Throwable $ex) {
+        error_log('[Fetch Grievance Types] ' . $ex->getMessage());
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -181,8 +212,6 @@ if ($conn instanceof mysqli) {
 $flashSuccess = '';
 $flashError   = '';
 
-// Map cell_members.member_type → users.role enum
-// users.role ENUM('ADMIN','STUDENT','PARENT','TEACHER','NON_TEACHING','MANAGEMENT')
 $roleMap = [
     'MANAGEMENT'       => 'MANAGEMENT',
     'GRIEVANCE_MEMBER' => 'MANAGEMENT',
@@ -201,23 +230,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $conn instanceof mysqli) {
 
     // -------- ADD MEMBER --------
     if ($action === 'add_member') {
-        $name            = trim((string) ($_POST['name']             ?? ''));
-        $email           = trim((string) ($_POST['email']            ?? ''));
-        $mobileNumber    = trim((string) ($_POST['mobile_number']    ?? ''));
-        $username        = trim((string) ($_POST['username']         ?? ''));
-        $password        = (string)       ($_POST['password']        ?? '');
-        $memberType      = trim((string) ($_POST['member_type']      ?? 'STUDENT'));
-        $designationId   = (int) ($_POST['designation_id']           ?? 0);
-        $departmentId    = (int) ($_POST['department_id']            ?? 0);
+        $name             = trim((string) ($_POST['name']              ?? ''));
+        $email            = trim((string) ($_POST['email']             ?? ''));
+        $mobileNumber     = trim((string) ($_POST['mobile_number']     ?? ''));
+        $designationId    = (int) ($_POST['designation_id']            ?? 0);
+        $grievanceTypeId  = (int) ($_POST['grievance_type_id']         ?? 0);
+        $isManagement     = !empty($_POST['is_management']);
 
-        // Normalise nullable FK: 0 becomes NULL
-        $departmentIdDb = ($departmentId > 0) ? $departmentId : null;
+        $memberType = $isManagement ? 'MANAGEMENT' : 'GRIEVANCE_MEMBER';
+        $grievanceTypeIdDb = ($grievanceTypeId > 0) ? $grievanceTypeId : null;
 
-        if (!in_array($memberType, $validMemberTypes, true)) {
-            $memberType = 'STUDENT';
-        }
-
-        if ($name === '' || $email === '' || $mobileNumber === '' || $username === '' || $password === '') {
+        if ($name === '' || $email === '' || $mobileNumber === '') {
             $flashError = 'Please fill in all required fields.';
         } elseif (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
             $flashError = 'Please enter a valid email address.';
@@ -225,49 +248,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $conn instanceof mysqli) {
             $flashError = 'Mobile number must be exactly 10 digits.';
         } elseif ($designationId <= 0) {
             $flashError = 'Please select a designation.';
-        }
-
-        // Verify designation exists (required FK)
-        if ($flashError === '') {
-            try {
-                $chk = $conn->prepare("SELECT id FROM designations WHERE id = ? LIMIT 1");
-                $chk->bind_param('i', $designationId);
-                $chk->execute();
-                if ($chk->get_result()->num_rows === 0) {
-                    $chk->close();
-                    throw new Exception('Selected designation is not valid.');
-                }
-                $chk->close();
-
-                if ($departmentIdDb !== null) {
-                    $chk = $conn->prepare("SELECT id FROM departments WHERE id = ? LIMIT 1");
-                    $chk->bind_param('i', $departmentIdDb);
-                    $chk->execute();
-                    if ($chk->get_result()->num_rows === 0) {
-                        $chk->close();
-                        throw new Exception('Selected department is not valid.');
-                    }
-                    $chk->close();
-                }
-            } catch (Throwable $ex) {
-                $flashError = $ex->getMessage();
-            }
+        } elseif (!$isManagement && $grievanceTypeIdDb === null) {
+            $flashError = 'Please select a Grievance Type (required for Grievance Members).';
         }
 
         if ($flashError === '') {
             try {
                 $conn->begin_transaction();
 
-                // Duplicate checks
-                $chk = $conn->prepare("SELECT id FROM users WHERE username = ? LIMIT 1");
-                $chk->bind_param('s', $username);
-                $chk->execute();
-                if ($chk->get_result()->num_rows > 0) {
-                    $chk->close();
-                    throw new Exception('Username already exists.');
-                }
-                $chk->close();
-
+                // Duplicate email check
                 $chk2 = $conn->prepare("SELECT id FROM cell_members WHERE email = ? LIMIT 1");
                 $chk2->bind_param('s', $email);
                 $chk2->execute();
@@ -277,24 +266,49 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $conn instanceof mysqli) {
                 }
                 $chk2->close();
 
-                // Create user (mapped role)
-                $hash = password_hash($password, PASSWORD_BCRYPT);
-                $userRole = $roleMap[$memberType] ?? 'STUDENT';
+                // Unique username from email local-part
+                $baseUsername = strtolower(preg_replace('/[^a-z0-9]/i', '', strstr($email, '@', true) ?: 'member'));
+                if ($baseUsername === '') {
+                    $baseUsername = 'member';
+                }
+                $username = $baseUsername;
+                $suffix   = 1;
+                while (true) {
+                    $chkU = $conn->prepare("SELECT id FROM users WHERE username = ? LIMIT 1");
+                    $chkU->bind_param('s', $username);
+                    $chkU->execute();
+                    $exists = $chkU->get_result()->num_rows > 0;
+                    $chkU->close();
+                    if (!$exists) break;
+                    $username = $baseUsername . $suffix++;
+                    if ($suffix > 999) {
+                        throw new Exception('Unable to generate a unique username.');
+                    }
+                }
 
+                $plainPassword = 'Member@' . random_int(1000, 9999);
+                $hash          = password_hash($plainPassword, PASSWORD_BCRYPT);
+                $userRole      = $roleMap[$memberType] ?? 'MANAGEMENT';
+
+                // Create user
                 $stmtU = $conn->prepare("INSERT INTO users (username, password, role, status) VALUES (?, ?, ?, 'Approved')");
                 $stmtU->bind_param('sss', $username, $hash, $userRole);
                 $stmtU->execute();
                 $newUserId = (int) $conn->insert_id;
                 $stmtU->close();
 
-                // Insert cell member (grievance_type_id always NULL)
-                $stmtS = $conn->prepare("INSERT INTO cell_members (user_id, designation_id, department_id, member_type, grievance_type_id, name, email, mobile_number) VALUES (?, ?, ?, ?, NULL, ?, ?, ?)");
+                // Insert cell_members row
+                $stmtS = $conn->prepare(
+                    "INSERT INTO cell_members
+                        (user_id, designation_id, department_id, member_type, grievance_type_id, name, email, mobile_number)
+                     VALUES (?, ?, NULL, ?, ?, ?, ?, ?)"
+                );
                 $stmtS->bind_param(
-                    'iiissss',
+                    'iisssss',
                     $newUserId,
                     $designationId,
-                    $departmentIdDb,
                     $memberType,
+                    $grievanceTypeIdDb,
                     $name,
                     $email,
                     $mobileNumber
@@ -306,7 +320,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $conn instanceof mysqli) {
                 $stmtS->close();
 
                 $conn->commit();
-                $flashSuccess = 'Member added successfully.';
+
+                $flashSuccess = 'Member added successfully. Login credentials — Username: '
+                              . $username . '  |  Password: ' . $plainPassword;
             } catch (Throwable $ex) {
                 if ($conn instanceof mysqli) $conn->rollback();
                 error_log('[Add Member] ' . $ex->getMessage());
@@ -315,24 +331,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $conn instanceof mysqli) {
         }
     }
 
-    // -------- EDIT MEMBER --------
+    // -------- EDIT MEMBER (cell members only) --------
     if ($action === 'edit_member') {
-        $memberId        = (int) ($_POST['member_id']      ?? 0);
-        $name            = trim((string) ($_POST['name']             ?? ''));
-        $email           = trim((string) ($_POST['email']            ?? ''));
-        $mobileNumber    = trim((string) ($_POST['mobile_number']    ?? ''));
-        $memberType      = trim((string) ($_POST['member_type']      ?? 'STUDENT'));
-        $designationId   = (int) ($_POST['designation_id']           ?? 0);
-        $departmentId    = (int) ($_POST['department_id']            ?? 0);
+        $targetUserId     = (int) ($_POST['user_id']              ?? 0);
+        $name             = trim((string) ($_POST['name']             ?? ''));
+        $email            = trim((string) ($_POST['email']            ?? ''));
+        $mobileNumber     = trim((string) ($_POST['mobile_number']    ?? ''));
+        $designationId    = (int) ($_POST['designation_id']           ?? 0);
+        $grievanceTypeId  = (int) ($_POST['grievance_type_id']        ?? 0);
+        $isManagement     = !empty($_POST['is_management']);
+        $memberType       = $isManagement ? 'MANAGEMENT' : 'GRIEVANCE_MEMBER';
+        $grievanceTypeIdDb = ($grievanceTypeId > 0) ? $grievanceTypeId : null;
 
-        $departmentIdDb = ($departmentId > 0) ? $departmentId : null;
-
-        if (!in_array($memberType, $validMemberTypes, true)) {
-            $memberType = 'STUDENT';
-        }
-
-        if ($memberId <= 0) {
-            $flashError = 'Invalid member.';
+        if ($targetUserId <= 0) {
+            $flashError = 'Invalid user.';
         } elseif ($name === '' || $email === '' || $mobileNumber === '') {
             $flashError = 'Please fill in all required fields.';
         } elseif (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
@@ -341,51 +353,64 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $conn instanceof mysqli) {
             $flashError = 'Mobile number must be exactly 10 digits.';
         } elseif ($designationId <= 0) {
             $flashError = 'Please select a designation.';
+        } elseif (!$isManagement && $grievanceTypeIdDb === null) {
+            $flashError = 'Please select a Grievance Type (required for Grievance Members).';
         }
 
         if ($flashError === '') {
             try {
                 $conn->begin_transaction();
 
-                $chk = $conn->prepare("SELECT id FROM cell_members WHERE email = ? AND id != ? LIMIT 1");
-                $chk->bind_param('si', $email, $memberId);
-                $chk->execute();
-                if ($chk->get_result()->num_rows > 0) {
-                    $chk->close();
+                // Ensure the user is actually a cell member before updating
+                $chkExist = $conn->prepare("SELECT id FROM cell_members WHERE user_id = ? LIMIT 1");
+                $chkExist->bind_param('i', $targetUserId);
+                $chkExist->execute();
+                $resExist = $chkExist->get_result();
+                $existingCellMemberId = $resExist && $resExist->num_rows > 0
+                    ? (int) ($resExist->fetch_assoc()['id'] ?? 0)
+                    : 0;
+                $chkExist->close();
+
+                if ($existingCellMemberId === 0) {
+                    throw new Exception('This user is not a cell member. Use the + button to add a new member.');
+                }
+
+                // Duplicate email check
+                $chkEmail = $conn->prepare("SELECT id FROM cell_members WHERE email = ? AND user_id != ? LIMIT 1");
+                $chkEmail->bind_param('si', $email, $targetUserId);
+                $chkEmail->execute();
+                if ($chkEmail->get_result()->num_rows > 0) {
+                    $chkEmail->close();
                     throw new Exception('Email is already registered for another member.');
                 }
-                $chk->close();
+                $chkEmail->close();
 
-                // Update member (leave grievance_type_id untouched)
-                $stmt = $conn->prepare("UPDATE cell_members SET designation_id = ?, department_id = ?, member_type = ?, name = ?, email = ?, mobile_number = ? WHERE id = ?");
+                // Update cell_members row
+                $stmt = $conn->prepare(
+                    "UPDATE cell_members
+                     SET designation_id = ?, member_type = ?, grievance_type_id = ?,
+                         name = ?, email = ?, mobile_number = ?
+                     WHERE id = ?"
+                );
                 $stmt->bind_param(
-                    'iissssi',
+                    'isissis',
                     $designationId,
-                    $departmentIdDb,
                     $memberType,
+                    $grievanceTypeIdDb,
                     $name,
                     $email,
                     $mobileNumber,
-                    $memberId
+                    $existingCellMemberId
                 );
                 $stmt->execute();
                 $stmt->close();
 
-                // Sync role in users table
-                $stmtG = $conn->prepare("SELECT user_id FROM cell_members WHERE id = ? LIMIT 1");
-                $stmtG->bind_param('i', $memberId);
-                $stmtG->execute();
-                $resG = $stmtG->get_result();
-                $linkedUserId = $resG && $resG->num_rows > 0 ? (int) ($resG->fetch_assoc()['user_id'] ?? 0) : 0;
-                $stmtG->close();
-
-                if ($linkedUserId > 0) {
-                    $userRole = $roleMap[$memberType] ?? 'STUDENT';
-                    $stmtU = $conn->prepare("UPDATE users SET role = ? WHERE id = ?");
-                    $stmtU->bind_param('si', $userRole, $linkedUserId);
-                    $stmtU->execute();
-                    $stmtU->close();
-                }
+                // Sync users.role
+                $userRole = $roleMap[$memberType] ?? 'MANAGEMENT';
+                $stmtU = $conn->prepare("UPDATE users SET role = ? WHERE id = ?");
+                $stmtU->bind_param('si', $userRole, $targetUserId);
+                $stmtU->execute();
+                $stmtU->close();
 
                 $conn->commit();
                 $flashSuccess = 'Member updated successfully.';
@@ -397,99 +422,112 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $conn instanceof mysqli) {
         }
     }
 
-    // -------- DELETE MEMBER --------
-    if ($action === 'delete_member') {
-        $memberId = (int) ($_POST['member_id'] ?? 0);
-        if ($memberId > 0) {
+    // -------- SET PASSWORD --------
+    if ($action === 'set_password') {
+        $targetUserId    = (int) ($_POST['user_id'] ?? 0);
+        $newPassword     = (string) ($_POST['new_password']     ?? '');
+        $confirmPassword = (string) ($_POST['confirm_password'] ?? '');
+
+        if ($targetUserId <= 0) {
+            $flashError = 'Invalid user.';
+        } elseif ($newPassword === '') {
+            $flashError = 'Password is required.';
+        } elseif (strlen($newPassword) < 6) {
+            $flashError = 'Password must be at least 6 characters.';
+        } elseif ($newPassword !== $confirmPassword) {
+            $flashError = 'Password and Confirm Password do not match.';
+        }
+
+        if ($flashError === '') {
             try {
-                $conn->begin_transaction();
-
-                $stmtG = $conn->prepare("SELECT user_id FROM cell_members WHERE id = ? LIMIT 1");
-                $stmtG->bind_param('i', $memberId);
-                $stmtG->execute();
-                $resG = $stmtG->get_result();
-                $linkedUserId = $resG && $resG->num_rows > 0 ? (int) ($resG->fetch_assoc()['user_id'] ?? 0) : 0;
-                $stmtG->close();
-
-                $stmtD = $conn->prepare("DELETE FROM cell_members WHERE id = ?");
-                $stmtD->bind_param('i', $memberId);
-                $stmtD->execute();
-                $stmtD->close();
-
-                if ($linkedUserId > 0) {
-                    $stmtU = $conn->prepare("DELETE FROM users WHERE id = ?");
-                    $stmtU->bind_param('i', $linkedUserId);
-                    $stmtU->execute();
-                    $stmtU->close();
+                // Verify user exists
+                $chkUser = $conn->prepare("SELECT id FROM users WHERE id = ? LIMIT 1");
+                $chkUser->bind_param('i', $targetUserId);
+                $chkUser->execute();
+                if ($chkUser->get_result()->num_rows === 0) {
+                    $chkUser->close();
+                    throw new Exception('User account not found.');
                 }
+                $chkUser->close();
 
-                $conn->commit();
-                $flashSuccess = 'Member deleted successfully.';
+                $hash = password_hash($newPassword, PASSWORD_BCRYPT);
+
+                $stmtU = $conn->prepare("UPDATE users SET password = ? WHERE id = ?");
+                $stmtU->bind_param('si', $hash, $targetUserId);
+                $stmtU->execute();
+                $stmtU->close();
+
+                $flashSuccess = 'Password updated successfully.';
             } catch (Throwable $ex) {
-                if ($conn instanceof mysqli) $conn->rollback();
-                error_log('[Delete Member] ' . $ex->getMessage());
-                $flashError = 'A system error occurred while deleting the member.';
+                error_log('[Set Password] ' . $ex->getMessage());
+                $flashError = $ex->getMessage() ?: 'A system error occurred while updating the password.';
+            }
+        }
+    }
+
+    // -------- DELETE USER --------
+    if ($action === 'delete_member') {
+        $targetUserId = (int) ($_POST['user_id'] ?? 0);
+        if ($targetUserId > 0) {
+            if ($targetUserId === $userId) {
+                $flashError = 'You cannot delete your own account.';
+            } else {
+                try {
+                    $conn->begin_transaction();
+
+                    // Refuse to delete ADMIN accounts
+                    $chkRole = $conn->prepare("SELECT role FROM users WHERE id = ? LIMIT 1");
+                    $chkRole->bind_param('i', $targetUserId);
+                    $chkRole->execute();
+                    $resRole = $chkRole->get_result();
+                    $targetRole = $resRole && $resRole->num_rows > 0
+                        ? strtoupper((string) ($resRole->fetch_assoc()['role'] ?? ''))
+                        : '';
+                    $chkRole->close();
+
+                    if ($targetRole === 'ADMIN') {
+                        throw new Exception('Admin accounts cannot be deleted from this page.');
+                    }
+
+                    $stmtD1 = $conn->prepare("DELETE FROM cell_members WHERE user_id = ?");
+                    $stmtD1->bind_param('i', $targetUserId);
+                    $stmtD1->execute();
+                    $stmtD1->close();
+
+                    $stmtD2 = $conn->prepare("DELETE FROM users WHERE id = ?");
+                    $stmtD2->bind_param('i', $targetUserId);
+                    $stmtD2->execute();
+                    $stmtD2->close();
+
+                    $conn->commit();
+                    $flashSuccess = 'User deleted successfully.';
+                } catch (Throwable $ex) {
+                    if ($conn instanceof mysqli) $conn->rollback();
+                    error_log('[Delete User] ' . $ex->getMessage());
+                    $flashError = $ex->getMessage() ?: 'A system error occurred while deleting the user.';
+                }
             }
         }
     }
 
     // -------- DEACTIVATE --------
     if ($action === 'deactivate_member') {
-        $memberId = (int) ($_POST['member_id'] ?? 0);
-        if ($memberId > 0) {
-            try {
-                $stmtG = $conn->prepare("SELECT user_id FROM cell_members WHERE id = ? LIMIT 1");
-                $stmtG->bind_param('i', $memberId);
-                $stmtG->execute();
-                $resG = $stmtG->get_result();
-                $linkedUserId = $resG && $resG->num_rows > 0 ? (int) ($resG->fetch_assoc()['user_id'] ?? 0) : 0;
-                $stmtG->close();
-
-                if ($linkedUserId > 0) {
+        $targetUserId = (int) ($_POST['user_id'] ?? 0);
+        if ($targetUserId > 0) {
+            if ($targetUserId === $userId) {
+                $flashError = 'You cannot deactivate your own account.';
+            } else {
+                try {
                     $stmtU = $conn->prepare("UPDATE users SET status = 'Terminated' WHERE id = ?");
-                    $stmtU->bind_param('i', $linkedUserId);
+                    $stmtU->bind_param('i', $targetUserId);
                     $stmtU->execute();
                     $stmtU->close();
 
-                    $flashSuccess = 'Member deactivated successfully.';
-                } else {
-                    $flashError = 'Linked user account not found.';
+                    $flashSuccess = 'User deactivated successfully.';
+                } catch (Throwable $ex) {
+                    error_log('[Deactivate User] ' . $ex->getMessage());
+                    $flashError = 'A system error occurred while deactivating the user.';
                 }
-            } catch (Throwable $ex) {
-                error_log('[Deactivate Member] ' . $ex->getMessage());
-                $flashError = 'A system error occurred while deactivating the member.';
-            }
-        }
-    }
-
-    // -------- RESET PASSWORD --------
-    if ($action === 'reset_password') {
-        $memberId = (int) ($_POST['member_id'] ?? 0);
-        if ($memberId > 0) {
-            try {
-                $stmtG = $conn->prepare("SELECT user_id FROM cell_members WHERE id = ? LIMIT 1");
-                $stmtG->bind_param('i', $memberId);
-                $stmtG->execute();
-                $resG = $stmtG->get_result();
-                $linkedUserId = $resG && $resG->num_rows > 0 ? (int) ($resG->fetch_assoc()['user_id'] ?? 0) : 0;
-                $stmtG->close();
-
-                if ($linkedUserId > 0) {
-                    $newPassword = 'Member@' . random_int(1000, 9999);
-                    $hash        = password_hash($newPassword, PASSWORD_BCRYPT);
-
-                    $stmtU = $conn->prepare("UPDATE users SET password = ? WHERE id = ?");
-                    $stmtU->bind_param('si', $hash, $linkedUserId);
-                    $stmtU->execute();
-                    $stmtU->close();
-
-                    $flashSuccess = 'Password reset successfully. New password: ' . $newPassword;
-                } else {
-                    $flashError = 'Linked user account not found.';
-                }
-            } catch (Throwable $ex) {
-                error_log('[Reset Password] ' . $ex->getMessage());
-                $flashError = 'A system error occurred while resetting the password.';
             }
         }
     }
@@ -529,49 +567,83 @@ if (!in_array($filterStatus, array_merge(['All'], $validStatuses), true)) {
 }
 
 // ---------------------------------------------------------------------------
-// 9. FETCH CELL MEMBERS (with joins)
+// 9. FETCH ALL NON-ADMIN USERS (LEFT JOIN cell_members) + FILTERS
 // ---------------------------------------------------------------------------
-$members = [];
+$users = [];
 
 if ($conn instanceof mysqli) {
     try {
-        $sql = "SELECT  cm.id,
-                        cm.user_id,
-                        cm.designation_id,
-                        cm.department_id,
-                        cm.grievance_type_id,
-                        cm.member_type,
+        $sql = "SELECT
+                    u.id                AS user_id,
+                    u.username,
+                    u.role              AS user_role,
+                    u.status            AS user_status,
+
+                    cm.id               AS cell_member_id,
+                    cm.designation_id,
+                    cm.department_id,
+                    cm.grievance_type_id,
+                    cm.member_type,
+                    cm.name             AS cell_name,
+                    cm.email            AS cell_email,
+                    cm.mobile_number    AS cell_mobile,
+
+                    COALESCE(
                         cm.name,
+                        s.name,
+                        p.name,
+                        st.name
+                    )                   AS display_name,
+
+                    COALESCE(
                         cm.email,
+                        s.email,
+                        p.email,
+                        st.email
+                    )                   AS display_email,
+
+                    COALESCE(
                         cm.mobile_number,
-                        u.username,
-                        u.status,
-                        d.designation_name,
-                        dep.department_name,
-                        gt.type_name
-                FROM cell_members cm
-                LEFT JOIN users u            ON cm.user_id            = u.id
-                LEFT JOIN designations d     ON cm.designation_id     = d.id
-                LEFT JOIN departments dep    ON cm.department_id      = dep.id
-                LEFT JOIN grievance_types gt ON cm.grievance_type_id  = gt.id
-                WHERE 1=1";
+                        p.contact_number,
+                        s.contact_number,
+                        st.contact_number
+                    )                   AS display_mobile
+
+                FROM users u
+                LEFT JOIN cell_members cm  ON cm.user_id = u.id
+                LEFT JOIN students     s   ON s.user_id  = u.id
+                LEFT JOIN parents      p   ON p.user_id  = u.id
+                LEFT JOIN staff        st  ON st.user_id = u.id
+                WHERE u.role <> 'ADMIN'";
 
         $params = [];
         $types  = '';
 
+        // ---- Member Type filter ----
         if ($filterMemberType !== 'ALL') {
-            $sql .= " AND cm.member_type = ?";
-            $params[] = $filterMemberType;
-            $types   .= 's';
+            if ($filterMemberType === 'GRIEVANCE_MEMBER') {
+                $sql .= " AND cm.member_type = 'GRIEVANCE_MEMBER'";
+            } elseif ($filterMemberType === 'MANAGEMENT') {
+                $sql .= " AND (cm.member_type = 'MANAGEMENT' OR (cm.id IS NULL AND u.role = 'MANAGEMENT'))";
+            } elseif ($filterMemberType === 'TEACHING') {
+                $sql .= " AND (cm.member_type = 'TEACHING' OR (cm.id IS NULL AND u.role = 'TEACHER'))";
+            } elseif ($filterMemberType === 'NON_TEACHING') {
+                $sql .= " AND (cm.member_type = 'NON_TEACHING' OR (cm.id IS NULL AND u.role = 'NON_TEACHING'))";
+            } elseif ($filterMemberType === 'PARENT') {
+                $sql .= " AND (cm.member_type = 'PARENT' OR (cm.id IS NULL AND u.role = 'PARENT'))";
+            } elseif ($filterMemberType === 'STUDENT') {
+                $sql .= " AND (cm.member_type = 'STUDENT' OR (cm.id IS NULL AND u.role = 'STUDENT'))";
+            }
         }
 
+        // ---- Status filter ----
         if ($filterStatus !== 'All') {
             $sql .= " AND u.status = ?";
             $params[] = $filterStatus;
             $types   .= 's';
         }
 
-        $sql .= " ORDER BY cm.id ASC";
+        $sql .= " ORDER BY u.id ASC";
 
         $stmt = $conn->prepare($sql);
         if ($stmt) {
@@ -582,12 +654,12 @@ if ($conn instanceof mysqli) {
             $res = $stmt->get_result();
 
             while ($row = $res->fetch_assoc()) {
-                $members[] = $row;
+                $users[] = $row;
             }
             $stmt->close();
         }
     } catch (Throwable $ex) {
-        error_log('[Fetch Cell Members] ' . $ex->getMessage());
+        error_log('[Fetch All Users] ' . $ex->getMessage());
     }
 }
 ?>
@@ -773,11 +845,11 @@ if ($conn instanceof mysqli) {
           <div class="bg-slate-100 border border-slate-200 rounded-xl px-5 py-4 shadow-sm">
             <form method="GET" action="cell_members.php" class="grid grid-cols-1 md:grid-cols-12 gap-4 items-end">
               <div class="md:col-span-4">
-                <label for="member_type" class="block text-sm font-semibold text-slate-700 mb-1.5">Member Type</label>
-                <select name="member_type" id="member_type" class="w-full px-4 py-2.5 border-2 border-slate-200 rounded-lg text-sm bg-white text-slate-800 font-medium focus:outline-none focus:border-[#4A154B] focus:ring-4 focus:ring-[#4A154B]/10 hover:border-[#4A154B]/40 transition-all">
+                <label for="member_type_filter" class="block text-sm font-semibold text-slate-700 mb-1.5">Member Type</label>
+                <select name="member_type" id="member_type_filter" class="w-full px-4 py-2.5 border-2 border-slate-200 rounded-lg text-sm bg-white text-slate-800 font-medium focus:outline-none focus:border-[#4A154B] focus:ring-4 focus:ring-[#4A154B]/10 hover:border-[#4A154B]/40 transition-all">
                   <option value="ALL"              <?= $filterMemberType === 'ALL'              ? 'selected' : '' ?>>ALL</option>
-                  <option value="MANAGEMENT"       <?= $filterMemberType === 'MANAGEMENT'       ? 'selected' : '' ?>>MANAGEMENT</option>
                   <option value="GRIEVANCE_MEMBER" <?= $filterMemberType === 'GRIEVANCE_MEMBER' ? 'selected' : '' ?>>GRIEVANCE MEMBER</option>
+                  <option value="MANAGEMENT"       <?= $filterMemberType === 'MANAGEMENT'       ? 'selected' : '' ?>>MANAGEMENT</option>
                   <option value="TEACHING"         <?= $filterMemberType === 'TEACHING'         ? 'selected' : '' ?>>TEACHING</option>
                   <option value="NON_TEACHING"     <?= $filterMemberType === 'NON_TEACHING'     ? 'selected' : '' ?>>NON TEACHING</option>
                   <option value="PARENT"           <?= $filterMemberType === 'PARENT'           ? 'selected' : '' ?>>PARENT</option>
@@ -786,8 +858,8 @@ if ($conn instanceof mysqli) {
               </div>
 
               <div class="md:col-span-4">
-                <label for="status" class="block text-sm font-semibold text-slate-700 mb-1.5">Status</label>
-                <select name="status" id="status" class="w-full px-4 py-2.5 border-2 border-slate-200 rounded-lg text-sm bg-white text-slate-800 font-medium focus:outline-none focus:border-[#4A154B] focus:ring-4 focus:ring-[#4A154B]/10 hover:border-[#4A154B]/40 transition-all">
+                <label for="status_filter" class="block text-sm font-semibold text-slate-700 mb-1.5">Status</label>
+                <select name="status" id="status_filter" class="w-full px-4 py-2.5 border-2 border-slate-200 rounded-lg text-sm bg-white text-slate-800 font-medium focus:outline-none focus:border-[#4A154B] focus:ring-4 focus:ring-[#4A154B]/10 hover:border-[#4A154B]/40 transition-all">
                   <option value="All"        <?= $filterStatus === 'All'        ? 'selected' : '' ?>>All</option>
                   <option value="Approved"   <?= $filterStatus === 'Approved'   ? 'selected' : '' ?>>Approved</option>
                   <option value="Pending"    <?= $filterStatus === 'Pending'    ? 'selected' : '' ?>>Pending</option>
@@ -846,32 +918,40 @@ if ($conn instanceof mysqli) {
                 </thead>
                 <tbody class="divide-y divide-slate-100" id="membersTableBody">
 
-                  <?php if (empty($members)): ?>
+                  <?php if (empty($users)): ?>
                     <tr>
                       <td colspan="7" class="px-6 py-16 text-center text-slate-500">
                         <div class="flex flex-col items-center justify-center">
                           <div class="w-16 h-16 bg-purple-50 rounded-full flex items-center justify-center mb-4">
                             <i data-lucide="users" class="w-8 h-8 text-[#8B1E7E]"></i>
                           </div>
-                          <p class="text-lg font-semibold text-slate-700">No members found</p>
+                          <p class="text-lg font-semibold text-slate-700">No users found</p>
                           <p class="text-sm text-slate-500 mt-1 mb-4">Try adjusting the filters, or add a new member with the "+" button.</p>
                         </div>
                       </td>
                     </tr>
                   <?php else: ?>
-                    <?php foreach ($members as $index => $member): ?>
+                    <?php foreach ($users as $index => $row): ?>
                       <?php
-                        $memberId        = (int) $member['id'];
-                        $memberName      = (string) ($member['name']          ?? '');
-                        $memberType      = (string) ($member['member_type']   ?? '');
-                        $memberEmail     = (string) ($member['email']         ?? '');
-                        $memberMobile    = (string) ($member['mobile_number'] ?? '');
-                        $memberStatus    = (string) ($member['status']        ?? 'Approved');
-                        $memberUser      = (string) ($member['username']      ?? '');
-                        $memberDesigId   = (int)    ($member['designation_id']    ?? 0);
-                        $memberDeptId    = (int)    ($member['department_id']     ?? 0);
+                        $rowUserId        = (int)    $row['user_id'];
+                        $rowUsername      = (string) ($row['username']         ?? '');
+                        $rowUserRole      = (string) ($row['user_role']        ?? '');
+                        $rowUserStatus    = (string) ($row['user_status']      ?? 'Approved');
 
-                        $statusCls = match (strtolower($memberStatus)) {
+                        $rowMemberType    = $row['member_type'] !== null ? (string) $row['member_type'] : null;
+                        $rowDesignationId = (int)    ($row['designation_id']   ?? 0);
+                        $rowGrievanceType = (int)    ($row['grievance_type_id'] ?? 0);
+
+                        $rowDisplayName   = (string) ($row['display_name']     ?? $rowUsername);
+                        $rowDisplayEmail  = (string) ($row['display_email']    ?? '');
+                        $rowDisplayMobile = (string) ($row['display_mobile']   ?? '');
+
+                        $rowIsCellMember  = isCellMember($rowMemberType);
+                        $rowIsManagement  = ($rowMemberType === 'MANAGEMENT');
+
+                        $rowMemberTypeLbl = resolveMemberTypeLabel($rowMemberType, $rowUserRole);
+
+                        $statusCls = match (strtolower($rowUserStatus)) {
                             'approved'   => 'bg-emerald-100 text-emerald-800 border-emerald-200',
                             'pending'    => 'bg-amber-100 text-amber-800 border-amber-200',
                             'rejected'   => 'bg-red-100 text-red-800 border-red-200',
@@ -881,31 +961,46 @@ if ($conn instanceof mysqli) {
                       ?>
                       <tr class="hover:bg-slate-50/80 transition-colors group">
                         <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-slate-900"><?= $index + 1 ?></td>
-                        <td class="px-6 py-4 text-sm font-semibold text-slate-800"><?= e($memberName) ?></td>
-                        <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-slate-700"><?= e(memberTypeLabel($memberType)) ?></td>
-                        <td class="px-6 py-4 text-sm text-slate-600 break-all"><?= e($memberEmail) ?></td>
-                        <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-600"><?= e($memberMobile !== '' ? $memberMobile : '—') ?></td>
+                        <td class="px-6 py-4 text-sm font-semibold text-slate-800"><?= e($rowDisplayName) ?></td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-slate-700">
+                          <?= e($rowMemberTypeLbl) ?>
+                        </td>
+                        <td class="px-6 py-4 text-sm text-slate-600 break-all"><?= e($rowDisplayEmail !== '' ? $rowDisplayEmail : '—') ?></td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-600"><?= e($rowDisplayMobile !== '' ? $rowDisplayMobile : '—') ?></td>
                         <td class="px-6 py-4 whitespace-nowrap">
-                          <span class="inline-flex items-center px-3 py-1 text-xs font-semibold rounded-full border <?= $statusCls ?>"><?= e($memberStatus) ?></span>
+                          <span class="inline-flex items-center px-3 py-1 text-xs font-semibold rounded-full border <?= $statusCls ?>"><?= e($rowUserStatus) ?></span>
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap">
                           <div class="grid grid-cols-2 gap-1.5 w-fit mx-auto">
-                            <button type="button" title="Reset password" onclick='confirmResetPassword(<?= $memberId ?>, <?= json_encode($memberName) ?>)'
+                            <!-- Set Password -->
+                            <button type="button" title="Set password"
+                                    onclick='openSetPasswordModal(<?= $rowUserId ?>, <?= json_encode($rowDisplayName) ?>)'
                                     class="w-8 h-8 rounded-full bg-purple-50 hover:bg-[#4A154B] flex items-center justify-center text-[#4A154B] hover:text-white transition-all duration-200 hover:scale-110">
-                              <i data-lucide="lock" class="w-3.5 h-3.5"></i>
+                              <i data-lucide="key-round" class="w-3.5 h-3.5"></i>
                             </button>
 
-                            <button type="button" title="Edit member" onclick='openMemberModal("edit", <?= $memberId ?>, <?= json_encode($memberName) ?>, <?= json_encode($memberType) ?>, <?= json_encode($memberDesigId) ?>, <?= json_encode($memberDeptId) ?>, <?= json_encode($memberEmail) ?>, <?= json_encode($memberMobile) ?>)'
-                                    class="w-8 h-8 rounded-full bg-purple-50 hover:bg-[#4A154B] flex items-center justify-center text-[#4A154B] hover:text-white transition-all duration-200 hover:scale-110">
-                              <i data-lucide="pencil" class="w-3.5 h-3.5"></i>
-                            </button>
+                            <!-- Edit -->
+                            <?php if ($rowIsCellMember): ?>
+                              <button type="button" title="Edit member"
+                                      onclick='openMemberModal("edit", <?= $rowUserId ?>, <?= json_encode($rowDisplayName) ?>, <?= $rowIsManagement ? '1' : '0' ?>, <?= json_encode($rowDesignationId) ?>, <?= json_encode($rowGrievanceType) ?>, <?= json_encode($rowDisplayEmail) ?>, <?= json_encode($rowDisplayMobile) ?>)'
+                                      class="w-8 h-8 rounded-full bg-purple-50 hover:bg-[#4A154B] flex items-center justify-center text-[#4A154B] hover:text-white transition-all duration-200 hover:scale-110">
+                                <i data-lucide="pencil" class="w-3.5 h-3.5"></i>
+                              </button>
+                            <?php else: ?>
+                              <button type="button" title="Edit unavailable (not a cell member)" disabled
+                                      class="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-300 cursor-not-allowed">
+                                <i data-lucide="pencil-off" class="w-3.5 h-3.5"></i>
+                              </button>
+                            <?php endif; ?>
 
-                            <button type="button" title="Deactivate member" onclick='confirmDeactivate(<?= $memberId ?>, <?= json_encode($memberName) ?>)'
+                            <!-- Deactivate -->
+                            <button type="button" title="Deactivate user" onclick='confirmDeactivate(<?= $rowUserId ?>, <?= json_encode($rowDisplayName) ?>)'
                                     class="w-8 h-8 rounded-full bg-purple-50 hover:bg-[#4A154B] flex items-center justify-center text-[#4A154B] hover:text-white transition-all duration-200 hover:scale-110">
                               <i data-lucide="x" class="w-3.5 h-3.5"></i>
                             </button>
 
-                            <button type="button" title="Delete member" onclick='confirmDeleteMember(<?= $memberId ?>, <?= json_encode($memberName) ?>)'
+                            <!-- Delete -->
+                            <button type="button" title="Delete user" onclick='confirmDeleteMember(<?= $rowUserId ?>, <?= json_encode($rowDisplayName) ?>)'
                                     class="w-8 h-8 rounded-full bg-purple-50 hover:bg-red-500 flex items-center justify-center text-[#4A154B] hover:text-white transition-all duration-200 hover:scale-110">
                               <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
                             </button>
@@ -919,12 +1014,12 @@ if ($conn instanceof mysqli) {
               </table>
             </div>
 
-            <?php if (!empty($members)): ?>
+            <?php if (!empty($users)): ?>
               <div class="px-6 py-4 bg-slate-50/50 border-t border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-4">
                 <p class="text-sm text-slate-600" id="tableInfo">
                   Showing <span class="font-semibold text-slate-900">1</span> to
-                  <span class="font-semibold text-slate-900"><?= count($members) ?></span> of
-                  <span class="font-semibold text-slate-900"><?= count($members) ?></span> entries
+                  <span class="font-semibold text-slate-900"><?= count($users) ?></span> of
+                  <span class="font-semibold text-slate-900"><?= count($users) ?></span> entries
                 </p>
                 <div class="flex items-center space-x-2">
                   <button type="button" class="px-4 py-2 rounded-lg text-sm font-medium text-slate-500 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors" disabled>Previous</button>
@@ -958,126 +1053,157 @@ if ($conn instanceof mysqli) {
     </div>
   </div>
 
-  <!-- ADD/EDIT MEMBER MODAL -->
+  <!-- ============================================================ -->
+  <!-- ADD / EDIT MEMBER MODAL                                       -->
+  <!-- ============================================================ -->
   <div id="memberModal" class="hidden fixed inset-0 z-[60] flex items-center justify-center p-4">
     <div class="absolute inset-0 bg-black/40 backdrop-blur-sm" onclick="closeMemberModal()"></div>
 
-    <div class="relative w-full max-w-2xl bg-white rounded-2xl shadow-2xl animate-modal-in overflow-hidden">
+    <div class="relative w-full max-w-lg bg-white rounded-2xl shadow-2xl animate-modal-in overflow-hidden max-h-[92vh] flex flex-col">
       <div class="h-1.5 w-full bg-gradient-to-r from-[#6A2C8A] via-[#8B1E7E] to-[#C43A7A]"></div>
 
       <div class="flex items-center justify-between px-6 py-4 border-b border-slate-100">
-        <h3 id="memberModalTitle" class="text-lg font-bold text-slate-800">Add Member</h3>
+        <h3 id="memberModalTitle" class="text-lg font-bold text-slate-800">Create Grievance Cell Member</h3>
         <button type="button" onclick="closeMemberModal()" class="w-8 h-8 rounded-lg hover:bg-slate-100 flex items-center justify-center text-slate-500 transition-colors">
           <i data-lucide="x" class="w-5 h-5"></i>
         </button>
       </div>
 
-      <form id="memberForm" method="POST" action="cell_members.php" class="p-6 space-y-4">
+      <form id="memberForm" method="POST" action="cell_members.php" class="p-6 space-y-4 overflow-y-auto flex-1" novalidate>
         <input type="hidden" name="action" id="formAction" value="add_member" />
-        <input type="hidden" name="member_id" id="formMemberId" value="" />
+        <input type="hidden" name="user_id" id="formUserId" value="" />
         <input type="hidden" name="filter_member_type" value="<?= e($filterMemberType) ?>" />
         <input type="hidden" name="filter_status" value="<?= e($filterStatus) ?>" />
 
-        <?php if (empty($designationOptions)): ?>
-          <div class="rounded-xl border-2 border-amber-200 bg-amber-50 px-4 py-3 flex items-start space-x-2">
-            <i data-lucide="alert-triangle" class="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5"></i>
-            <div>
-              <p class="text-sm font-semibold text-amber-800">No designations available</p>
-              <p class="text-xs text-amber-700 mt-1">
-                You must add at least one <strong>Designation</strong> first before adding cell members.
-                <a href="designations.php" class="underline font-semibold">Go to Designations →</a>
-              </p>
-            </div>
-          </div>
-        <?php endif; ?>
-
-        <!-- Row 1: Name + Member Type -->
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div class="space-y-2">
-            <label for="name" class="block text-sm font-semibold text-slate-700">Full Name <span class="text-[#E5097F]">*</span></label>
-            <input type="text" name="name" id="name" required placeholder="e.g. John Doe"
-                   class="w-full px-4 py-3 border-2 border-slate-200 rounded-xl bg-white text-slate-800 font-medium placeholder-slate-400 focus:outline-none focus:border-[#4A154B] focus:ring-4 focus:ring-[#4A154B]/10 hover:border-[#4A154B]/40 transition-all" />
-          </div>
-
-          <div class="space-y-2">
-            <label for="member_type" class="block text-sm font-semibold text-slate-700">Member Type <span class="text-[#E5097F]">*</span></label>
-            <select name="member_type" id="member_type" required
-                    class="w-full px-4 py-3 border-2 border-slate-200 rounded-xl appearance-none bg-white text-slate-800 font-medium focus:outline-none focus:border-[#4A154B] focus:ring-4 focus:ring-[#4A154B]/10 hover:border-[#4A154B]/40 transition-all">
-              <option value="MANAGEMENT">MANAGEMENT</option>
-              <option value="GRIEVANCE_MEMBER">GRIEVANCE MEMBER</option>
-              <option value="TEACHING">TEACHING</option>
-              <option value="NON_TEACHING">NON TEACHING</option>
-              <option value="PARENT">PARENT</option>
-              <option value="STUDENT" selected>STUDENT</option>
-            </select>
-          </div>
+        <div class="space-y-2">
+          <label for="name" class="block text-sm font-semibold text-slate-700">Name<span class="text-red-500">*</span></label>
+          <input type="text" name="name" id="name" required placeholder=""
+                 class="w-full px-4 py-3 border-2 border-slate-200 rounded-xl bg-white text-slate-800 font-medium placeholder-slate-400 focus:outline-none focus:border-[#4A154B] focus:ring-4 focus:ring-[#4A154B]/10 hover:border-[#4A154B]/40 transition-all" />
         </div>
 
-        <!-- Row 2: Designation + Department -->
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div class="space-y-2">
-            <label for="designation_id" class="block text-sm font-semibold text-slate-700">Designation <span class="text-[#E5097F]">*</span></label>
-            <select name="designation_id" id="designation_id" required
-                    class="w-full px-4 py-3 border-2 border-slate-200 rounded-xl appearance-none bg-white text-slate-800 font-medium focus:outline-none focus:border-[#4A154B] focus:ring-4 focus:ring-[#4A154B]/10 hover:border-[#4A154B]/40 transition-all">
-              <option value="">-- Select Designation --</option>
-              <?php foreach ($designationOptions as $opt): ?>
-                <option value="<?= (int) $opt['id'] ?>"><?= e($opt['designation_name']) ?></option>
-              <?php endforeach; ?>
-            </select>
-          </div>
-
-          <div class="space-y-2">
-            <label for="department_id" class="block text-sm font-semibold text-slate-700">Department <span class="text-slate-400 text-xs">(optional)</span></label>
-            <select name="department_id" id="department_id"
-                    class="w-full px-4 py-3 border-2 border-slate-200 rounded-xl appearance-none bg-white text-slate-800 font-medium focus:outline-none focus:border-[#4A154B] focus:ring-4 focus:ring-[#4A154B]/10 hover:border-[#4A154B]/40 transition-all">
-              <option value="">-- None --</option>
-              <?php foreach ($departmentOptions as $opt): ?>
-                <option value="<?= (int) $opt['id'] ?>"><?= e($opt['department_name']) ?></option>
-              <?php endforeach; ?>
-            </select>
-          </div>
+        <div class="space-y-2">
+          <label for="designation_id" class="block text-sm font-semibold text-slate-700">Designation<span class="text-red-500">*</span></label>
+          <select name="designation_id" id="designation_id" required
+                  class="w-full px-4 py-3 border-2 border-slate-200 rounded-xl appearance-none bg-white text-slate-800 font-medium focus:outline-none focus:border-[#4A154B] focus:ring-4 focus:ring-[#4A154B]/10 hover:border-[#4A154B]/40 transition-all">
+            <option value="">Select</option>
+            <?php foreach ($designationOptions as $opt): ?>
+              <option value="<?= (int) $opt['id'] ?>"><?= e($opt['designation_name']) ?></option>
+            <?php endforeach; ?>
+          </select>
         </div>
 
-        <!-- Row 3: Email + Mobile -->
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div class="space-y-2">
-            <label for="email" class="block text-sm font-semibold text-slate-700">Email <span class="text-[#E5097F]">*</span></label>
-            <input type="email" name="email" id="email" required placeholder="e.g. member@rajagiri.edu"
-                   class="w-full px-4 py-3 border-2 border-slate-200 rounded-xl bg-white text-slate-800 font-medium placeholder-slate-400 focus:outline-none focus:border-[#4A154B] focus:ring-4 focus:ring-[#4A154B]/10 hover:border-[#4A154B]/40 transition-all" />
-          </div>
-
-          <div class="space-y-2">
-            <label for="mobile_number" class="block text-sm font-semibold text-slate-700">Mobile Number <span class="text-[#E5097F]">*</span></label>
-            <input type="tel" name="mobile_number" id="mobile_number" required inputmode="numeric" pattern="[0-9]{10}" minlength="10" maxlength="10" title="Please enter exactly 10 digits" placeholder="e.g. 9876543210"
-                   class="w-full px-4 py-3 border-2 border-slate-200 rounded-xl bg-white text-slate-800 font-medium placeholder-slate-400 focus:outline-none focus:border-[#4A154B] focus:ring-4 focus:ring-[#4A154B]/10 hover:border-[#4A154B]/40 transition-all" />
-            <p class="text-[11px] text-slate-500">Enter exactly 10 digits.</p>
-          </div>
+        <div class="space-y-2">
+          <label class="block text-sm font-semibold text-slate-700">Management Member</label>
+          <label class="inline-flex items-center cursor-pointer select-none">
+            <input type="checkbox" name="is_management" id="is_management" value="1"
+                   class="w-5 h-5 rounded border-slate-300 text-[#4A154B] focus:ring-[#4A154B]/30 cursor-pointer"
+                   onchange="toggleGrievanceType()" />
+          </label>
         </div>
 
-        <!-- Row 4: Username + Password (Add only) -->
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-4" id="credentialsBlock">
-          <div class="space-y-2">
-            <label for="username" class="block text-sm font-semibold text-slate-700">Username <span class="text-[#E5097F]">*</span></label>
-            <input type="text" name="username" id="username" required placeholder="e.g. johndoe"
-                   class="w-full px-4 py-3 border-2 border-slate-200 rounded-xl bg-white text-slate-800 font-medium placeholder-slate-400 focus:outline-none focus:border-[#4A154B] focus:ring-4 focus:ring-[#4A154B]/10 hover:border-[#4A154B]/40 transition-all" />
-          </div>
-
-          <div class="space-y-2" id="passwordFieldWrapper">
-            <label for="password" class="block text-sm font-semibold text-slate-700">Password <span class="text-[#E5097F]">*</span></label>
-            <div class="relative">
-              <input type="password" name="password" id="password" placeholder="e.g. Member@123"
-                     class="w-full pl-4 pr-12 py-3 border-2 border-slate-200 rounded-xl bg-white text-slate-800 font-medium placeholder-slate-400 focus:outline-none focus:border-[#4A154B] focus:ring-4 focus:ring-[#4A154B]/10 hover:border-[#4A154B]/40 transition-all" />
-              <button type="button" id="togglePasswordBtn" title="Show password" aria-label="Show password" tabindex="-1"
-                      class="absolute right-2 top-1/2 -translate-y-1/2 w-9 h-9 rounded-lg flex items-center justify-center text-slate-400 hover:text-[#8B1E7E] hover:bg-purple-50 transition-all duration-200 active:scale-95">
-                <i data-lucide="eye" id="togglePasswordIcon" class="w-5 h-5"></i>
-              </button>
-            </div>
-          </div>
+        <div class="space-y-2" id="grievanceTypeBlock">
+          <label for="grievance_type_id" class="block text-sm font-semibold text-slate-700">
+            Grievance Type<span class="text-red-500" id="grievanceTypeRequired">*</span>
+          </label>
+          <select name="grievance_type_id" id="grievance_type_id"
+                  class="w-full px-4 py-3 border-2 border-slate-200 rounded-xl appearance-none bg-white text-slate-800 font-medium focus:outline-none focus:border-[#4A154B] focus:ring-4 focus:ring-[#4A154B]/10 hover:border-[#4A154B]/40 transition-all">
+            <option value="">Select Some Options</option>
+            <?php foreach ($grievanceTypeOptions as $opt): ?>
+              <option value="<?= (int) $opt['id'] ?>"><?= e($opt['type_name']) ?></option>
+            <?php endforeach; ?>
+          </select>
         </div>
 
-        <div class="flex justify-center pt-3 gap-3">
-          <button type="button" onclick="closeMemberModal()" class="px-6 py-3 rounded-xl font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-200 transition-all duration-200 active:scale-95">Cancel</button>
-          <button type="submit" class="px-8 py-3 rounded-xl bg-gradient-to-r from-[#6A2C8A] via-[#8B1E7E] to-[#C43A7A] hover:from-[#5A1C7A] hover:via-[#7B0E6E] hover:to-[#B42A6A] text-white font-bold shadow-lg shadow-purple-500/30 hover:shadow-purple-500/50 transition-all duration-300 hover:-translate-y-0.5 active:scale-95">Save</button>
+        <div class="space-y-2">
+          <label for="email" class="block text-sm font-semibold text-slate-700">Email Id<span class="text-red-500">*</span></label>
+          <input type="email" name="email" id="email" required placeholder=""
+                 class="w-full px-4 py-3 border-2 border-slate-200 rounded-xl bg-white text-slate-800 font-medium placeholder-slate-400 focus:outline-none focus:border-[#4A154B] focus:ring-4 focus:ring-[#4A154B]/10 hover:border-[#4A154B]/40 transition-all" />
+        </div>
+
+        <div class="space-y-2">
+          <label for="mobile_number" class="block text-sm font-semibold text-slate-700">Mobile Number<span class="text-red-500">*</span></label>
+          <input type="tel" name="mobile_number" id="mobile_number" required inputmode="numeric" pattern="[0-9]{10}" minlength="10" maxlength="10" title="Please enter exactly 10 digits" placeholder=""
+                 class="w-full px-4 py-3 border-2 border-slate-200 rounded-xl bg-white text-slate-800 font-medium placeholder-slate-400 focus:outline-none focus:border-[#4A154B] focus:ring-4 focus:ring-[#4A154B]/10 hover:border-[#4A154B]/40 transition-all" />
+        </div>
+
+        <div class="pt-3 flex justify-center">
+          <button type="submit"
+                  class="px-10 py-3 rounded-xl bg-[#4A154B] hover:bg-[#5A1B5C]
+                         text-white font-bold shadow-lg shadow-purple-500/30 hover:shadow-purple-500/50
+                         transition-all duration-300 hover:-translate-y-0.5 active:scale-95">
+            Submit
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- SET PASSWORD MODAL                                            -->
+  <!-- ============================================================ -->
+  <div id="setPasswordModal" class="hidden fixed inset-0 z-[70] flex items-center justify-center p-4">
+    <div class="absolute inset-0 bg-black/40 backdrop-blur-sm" onclick="closeSetPasswordModal()"></div>
+
+    <div class="relative w-full max-w-md bg-white rounded-2xl shadow-2xl animate-modal-in overflow-hidden max-h-[92vh] flex flex-col">
+      <div class="h-1.5 w-full bg-gradient-to-r from-[#6A2C8A] via-[#8B1E7E] to-[#C43A7A]"></div>
+
+      <div class="flex items-center justify-between px-6 py-4 border-b border-slate-100">
+        <h3 class="text-lg font-bold text-slate-800">Set Password</h3>
+        <button type="button" onclick="closeSetPasswordModal()" class="w-8 h-8 rounded-lg hover:bg-slate-100 flex items-center justify-center text-slate-500 transition-colors">
+          <i data-lucide="x" class="w-5 h-5"></i>
+        </button>
+      </div>
+
+      <form id="setPasswordForm" method="POST" action="cell_members.php" class="p-6 space-y-4 overflow-y-auto flex-1" novalidate>
+        <input type="hidden" name="action" value="set_password" />
+        <input type="hidden" name="user_id" id="setPasswordUserId" value="" />
+        <input type="hidden" name="filter_member_type" value="<?= e($filterMemberType) ?>" />
+        <input type="hidden" name="filter_status" value="<?= e($filterStatus) ?>" />
+
+        <p class="text-sm text-slate-500 leading-relaxed">
+          Set a new password for
+          <span id="setPasswordNameDisplay" class="font-bold text-[#8B1E7E] break-words">this user</span>.
+        </p>
+
+        <!-- Password -->
+        <div class="space-y-2">
+          <label for="new_password" class="block text-sm font-semibold text-slate-700">Password<span class="text-red-500">*</span></label>
+          <div class="relative">
+            <input type="password" name="new_password" id="new_password" required minlength="6" autocomplete="new-password" placeholder="Enter password"
+                   class="w-full pl-4 pr-12 py-3 border-2 border-slate-200 rounded-xl bg-white text-slate-800 font-medium placeholder-slate-400 focus:outline-none focus:border-[#4A154B] focus:ring-4 focus:ring-[#4A154B]/10 hover:border-[#4A154B]/40 transition-all" />
+            <button type="button" onclick="togglePwdVisibility('new_password', this)" tabindex="-1"
+                    class="absolute right-2 top-1/2 -translate-y-1/2 w-9 h-9 rounded-lg flex items-center justify-center text-slate-400 hover:text-[#8B1E7E] hover:bg-purple-50 transition-all duration-200">
+              <i data-lucide="eye" class="w-5 h-5"></i>
+            </button>
+          </div>
+          <p class="text-xs text-slate-500">Minimum 6 characters.</p>
+        </div>
+
+        <!-- Confirm Password -->
+        <div class="space-y-2">
+          <label for="confirm_password" class="block text-sm font-semibold text-slate-700">Confirm Password<span class="text-red-500">*</span></label>
+          <div class="relative">
+            <input type="password" name="confirm_password" id="confirm_password" required minlength="6" autocomplete="new-password" placeholder="Re-enter password"
+                   class="w-full pl-4 pr-12 py-3 border-2 border-slate-200 rounded-xl bg-white text-slate-800 font-medium placeholder-slate-400 focus:outline-none focus:border-[#4A154B] focus:ring-4 focus:ring-[#4A154B]/10 hover:border-[#4A154B]/40 transition-all" />
+            <button type="button" onclick="togglePwdVisibility('confirm_password', this)" tabindex="-1"
+                    class="absolute right-2 top-1/2 -translate-y-1/2 w-9 h-9 rounded-lg flex items-center justify-center text-slate-400 hover:text-[#8B1E7E] hover:bg-purple-50 transition-all duration-200">
+              <i data-lucide="eye" class="w-5 h-5"></i>
+            </button>
+          </div>
+          <p id="setPwdMatchMsg" class="text-xs text-slate-500">Passwords must match.</p>
+        </div>
+
+        <div class="pt-3 flex justify-center gap-3">
+          <button type="button" onclick="closeSetPasswordModal()"
+                  class="px-6 py-3 rounded-xl font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-200 transition-all duration-200 active:scale-95">
+            Cancel
+          </button>
+          <button type="submit"
+                  class="px-8 py-3 rounded-xl bg-[#4A154B] hover:bg-[#5A1B5C]
+                         text-white font-bold shadow-lg shadow-purple-500/30 hover:shadow-purple-500/50
+                         transition-all duration-300 hover:-translate-y-0.5 active:scale-95">
+            Save Password
+          </button>
         </div>
       </form>
     </div>
@@ -1092,8 +1218,8 @@ if ($conn instanceof mysqli) {
         <div class="w-16 h-16 rounded-full flex items-center justify-center mb-4 bg-gradient-to-br from-red-100 to-pink-100 ring-4 ring-red-50">
           <i data-lucide="trash-2" class="w-8 h-8 text-red-500"></i>
         </div>
-        <h3 class="text-xl font-bold text-slate-800 mb-2">Delete Member?</h3>
-        <p class="text-sm text-slate-500 leading-relaxed">You are about to permanently delete <span id="deleteMemberNameDisplay" class="font-bold text-[#8B1E7E] break-words">this member</span>.</p>
+        <h3 class="text-xl font-bold text-slate-800 mb-2">Delete User?</h3>
+        <p class="text-sm text-slate-500 leading-relaxed">You are about to permanently delete <span id="deleteMemberNameDisplay" class="font-bold text-[#8B1E7E] break-words">this user</span>.</p>
         <p class="text-xs text-red-500 font-medium mt-3 flex items-center gap-1.5"><i data-lucide="alert-triangle" class="w-3.5 h-3.5"></i>This action cannot be undone.</p>
       </div>
       <div class="px-6 py-5 mt-2 flex flex-col-reverse sm:flex-row gap-3">
@@ -1114,8 +1240,8 @@ if ($conn instanceof mysqli) {
         <div class="w-16 h-16 rounded-full flex items-center justify-center mb-4 bg-gradient-to-br from-purple-100 to-pink-100 ring-4 ring-purple-50">
           <i data-lucide="user-x" class="w-8 h-8 text-[#8B1E7E]"></i>
         </div>
-        <h3 class="text-xl font-bold text-slate-800 mb-2">Deactivate Member?</h3>
-        <p class="text-sm text-slate-500 leading-relaxed"><span id="deactivateMemberNameDisplay" class="font-bold text-[#8B1E7E] break-words">This member</span> will be marked as <span class="font-bold text-[#8B1E7E]">Terminated</span> and will no longer be able to log in.</p>
+        <h3 class="text-xl font-bold text-slate-800 mb-2">Deactivate User?</h3>
+        <p class="text-sm text-slate-500 leading-relaxed"><span id="deactivateMemberNameDisplay" class="font-bold text-[#8B1E7E] break-words">This user</span> will be marked as <span class="font-bold text-[#8B1E7E]">Terminated</span> and will no longer be able to log in.</p>
       </div>
       <div class="px-6 py-5 mt-2 flex flex-col-reverse sm:flex-row gap-3">
         <button type="button" onclick="closeDeactivateModal()" class="flex-1 px-5 py-3 rounded-xl font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-200 transition-all duration-200 active:scale-95">Cancel</button>
@@ -1126,46 +1252,17 @@ if ($conn instanceof mysqli) {
     </div>
   </div>
 
-  <!-- RESET PASSWORD MODAL -->
-  <div id="resetConfirmModal" class="hidden fixed inset-0 z-[70] flex items-center justify-center p-4">
-    <div class="absolute inset-0 bg-black/50 backdrop-blur-sm" onclick="closeResetModal()"></div>
-    <div id="resetConfirmPanel" class="relative w-full max-w-md bg-white rounded-2xl shadow-2xl animate-modal-in overflow-hidden">
-      <div class="h-1.5 w-full bg-gradient-to-r from-[#6A2C8A] via-[#8B1E7E] to-[#C43A7A]"></div>
-      <div class="px-6 pt-6 pb-2 flex flex-col items-center text-center">
-        <div class="w-16 h-16 rounded-full flex items-center justify-center mb-4 bg-gradient-to-br from-purple-100 to-pink-100 ring-4 ring-purple-50">
-          <i data-lucide="lock" class="w-8 h-8 text-[#8B1E7E]"></i>
-        </div>
-        <h3 class="text-xl font-bold text-slate-800 mb-2">Reset Password?</h3>
-        <p class="text-sm text-slate-500 leading-relaxed">A new random password will be generated for <span id="resetMemberNameDisplay" class="font-bold text-[#8B1E7E] break-words">this member</span>.</p>
-        <p class="text-xs text-[#8B1E7E] font-medium mt-3 flex items-center gap-1.5"><i data-lucide="info" class="w-3.5 h-3.5"></i>The new password will be shown after reset.</p>
-      </div>
-      <div class="px-6 py-5 mt-2 flex flex-col-reverse sm:flex-row gap-3">
-        <button type="button" onclick="closeResetModal()" class="flex-1 px-5 py-3 rounded-xl font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-200 transition-all duration-200 active:scale-95">Cancel</button>
-        <button type="button" id="confirmResetBtn" class="flex-1 px-5 py-3 rounded-xl font-bold text-white bg-gradient-to-r from-[#6A2C8A] via-[#8B1E7E] to-[#C43A7A] hover:from-[#5A1C7A] hover:via-[#7B0E6E] hover:to-[#B42A6A] shadow-lg shadow-purple-500/30 hover:shadow-purple-500/50 transition-all duration-300 hover:-translate-y-0.5 active:scale-95 flex items-center justify-center gap-2">
-          <i data-lucide="refresh-cw" class="w-4 h-4"></i><span>Reset Password</span>
-        </button>
-      </div>
-    </div>
-  </div>
-
   <!-- HIDDEN FORMS -->
   <form id="deleteForm" method="POST" action="cell_members.php" class="hidden">
     <input type="hidden" name="action" value="delete_member" />
-    <input type="hidden" name="member_id" id="deleteMemberId" value="" />
+    <input type="hidden" name="user_id" id="deleteMemberId" value="" />
     <input type="hidden" name="filter_member_type" value="<?= e($filterMemberType) ?>" />
     <input type="hidden" name="filter_status" value="<?= e($filterStatus) ?>" />
   </form>
 
   <form id="deactivateForm" method="POST" action="cell_members.php" class="hidden">
     <input type="hidden" name="action" value="deactivate_member" />
-    <input type="hidden" name="member_id" id="deactivateMemberId" value="" />
-    <input type="hidden" name="filter_member_type" value="<?= e($filterMemberType) ?>" />
-    <input type="hidden" name="filter_status" value="<?= e($filterStatus) ?>" />
-  </form>
-
-  <form id="resetForm" method="POST" action="cell_members.php" class="hidden">
-    <input type="hidden" name="action" value="reset_password" />
-    <input type="hidden" name="member_id" id="resetMemberId" value="" />
+    <input type="hidden" name="user_id" id="deactivateMemberId" value="" />
     <input type="hidden" name="filter_member_type" value="<?= e($filterMemberType) ?>" />
     <input type="hidden" name="filter_status" value="<?= e($filterStatus) ?>" />
   </form>
@@ -1215,58 +1312,61 @@ if ($conn instanceof mysqli) {
       mobileInput.addEventListener('input', function () { this.value = this.value.replace(/\D/g, '').slice(0, 10); });
     })();
 
-    (function () {
-      const pw = document.getElementById('password');
-      const btn = document.getElementById('togglePasswordBtn');
-      const icon = document.getElementById('togglePasswordIcon');
-      if (!pw || !btn || !icon) return;
-      btn.addEventListener('click', function () {
-        const hidden = pw.type === 'password';
-        pw.type = hidden ? 'text' : 'password';
-        icon.setAttribute('data-lucide', hidden ? 'eye-off' : 'eye');
-        if (typeof lucide !== 'undefined') lucide.createIcons();
-      });
-    })();
+    function toggleGrievanceType() {
+      const isMgmt = document.getElementById('is_management');
+      const gBlock = document.getElementById('grievanceTypeBlock');
+      const gSelect = document.getElementById('grievance_type_id');
+      const gReq = document.getElementById('grievanceTypeRequired');
+      if (!isMgmt || !gBlock || !gSelect) return;
 
+      if (isMgmt.checked) {
+        gBlock.classList.add('opacity-60');
+        gSelect.removeAttribute('required');
+        if (gReq) gReq.classList.add('hidden');
+        gSelect.value = '';
+      } else {
+        gBlock.classList.remove('opacity-60');
+        gSelect.setAttribute('required', 'required');
+        if (gReq) gReq.classList.remove('hidden');
+      }
+    }
+
+    // -------- Add / Edit Member Modal --------
     const memberModal      = document.getElementById('memberModal');
     const memberModalTitle = document.getElementById('memberModalTitle');
     const memberForm       = document.getElementById('memberForm');
     const formAction       = document.getElementById('formAction');
-    const formMemberId     = document.getElementById('formMemberId');
+    const formUserId       = document.getElementById('formUserId');
     const nameInput        = document.getElementById('name');
-    const memberTypeInput  = document.getElementById('member_type');
     const designationInput = document.getElementById('designation_id');
-    const departmentInput  = document.getElementById('department_id');
     const emailInput       = document.getElementById('email');
     const mobileInput      = document.getElementById('mobile_number');
-    const usernameInput    = document.getElementById('username');
-    const passwordInput    = document.getElementById('password');
-    const credentialsBlock = document.getElementById('credentialsBlock');
+    const isMgmtInput      = document.getElementById('is_management');
+    const gTypeInput       = document.getElementById('grievance_type_id');
 
-    function openMemberModal(mode, memberId, name, memberType, designationId, departmentId, email, mobile) {
+    function openMemberModal(mode, userId, name, isManagement, designationId, grievanceTypeId, email, mobile) {
       memberModal.classList.remove('hidden');
+
       if (mode === 'edit') {
-        memberModalTitle.textContent = 'Edit Member';
-        formAction.value         = 'edit_member';
-        formMemberId.value       = memberId || '';
-        nameInput.value          = name || '';
-        memberTypeInput.value    = memberType || 'STUDENT';
-        designationInput.value   = designationId ? String(designationId) : '';
-        departmentInput.value    = departmentId  ? String(departmentId)  : '';
-        emailInput.value         = email || '';
-        mobileInput.value        = mobile || '';
-        if (credentialsBlock) credentialsBlock.style.display = 'none';
-        if (usernameInput) usernameInput.removeAttribute('required');
-        if (passwordInput) { passwordInput.removeAttribute('required'); passwordInput.value = ''; }
+        memberModalTitle.textContent = 'Edit Grievance Cell Member';
+        formAction.value = 'edit_member';
+        formUserId.value = userId || '';
+        nameInput.value  = name || '';
+        designationInput.value = designationId ? String(designationId) : '';
+        emailInput.value  = email || '';
+        mobileInput.value = mobile || '';
+        isMgmtInput.checked = String(isManagement) === '1';
+        gTypeInput.value   = grievanceTypeId ? String(grievanceTypeId) : '';
       } else {
-        memberModalTitle.textContent = 'Add Member';
+        memberModalTitle.textContent = 'Create Grievance Cell Member';
         formAction.value = 'add_member';
-        formMemberId.value = '';
+        formUserId.value = '';
         memberForm.reset();
-        if (credentialsBlock) credentialsBlock.style.display = '';
-        if (usernameInput) usernameInput.setAttribute('required', 'required');
-        if (passwordInput) passwordInput.setAttribute('required', 'required');
+        if (isMgmtInput) isMgmtInput.checked = false;
+        if (gTypeInput) gTypeInput.value = '';
       }
+
+      toggleGrievanceType();
       setTimeout(() => nameInput && nameInput.focus(), 50);
       if (typeof lucide !== 'undefined') lucide.createIcons();
     }
@@ -1275,18 +1375,89 @@ if ($conn instanceof mysqli) {
       memberModal.classList.add('hidden');
       memberForm.reset();
       formAction.value = 'add_member';
-      formMemberId.value = '';
+      formUserId.value = '';
+      if (isMgmtInput) isMgmtInput.checked = false;
     }
 
+    // -------- Set Password Modal --------
+    const setPasswordModal      = document.getElementById('setPasswordModal');
+    const setPasswordForm       = document.getElementById('setPasswordForm');
+    const setPasswordUserIdEl   = document.getElementById('setPasswordUserId');
+    const setPasswordNameEl     = document.getElementById('setPasswordNameDisplay');
+    const newPasswordInput      = document.getElementById('new_password');
+    const confirmPasswordInput  = document.getElementById('confirm_password');
+    const setPwdMatchMsg        = document.getElementById('setPwdMatchMsg');
+
+    function openSetPasswordModal(userId, name) {
+      setPasswordUserIdEl.value = userId || '';
+      setPasswordNameEl.textContent = '"' + (name || '') + '"';
+      setPasswordForm.reset();
+      if (setPwdMatchMsg) {
+        setPwdMatchMsg.textContent = 'Passwords must match.';
+        setPwdMatchMsg.classList.remove('text-red-500', 'text-emerald-600');
+        setPwdMatchMsg.classList.add('text-slate-500');
+      }
+      setPasswordModal.classList.remove('hidden');
+      document.body.classList.add('overflow-hidden');
+      setTimeout(() => newPasswordInput && newPasswordInput.focus(), 60);
+      if (typeof lucide !== 'undefined') lucide.createIcons();
+    }
+
+    function closeSetPasswordModal() {
+      setPasswordModal.classList.add('hidden');
+      document.body.classList.remove('overflow-hidden');
+      setPasswordForm.reset();
+    }
+
+    function checkSetPwdMatch() {
+      if (!newPasswordInput || !confirmPasswordInput || !setPwdMatchMsg) return;
+      const a = newPasswordInput.value;
+      const b = confirmPasswordInput.value;
+
+      if (b === '') {
+        setPwdMatchMsg.textContent = 'Passwords must match.';
+        setPwdMatchMsg.classList.remove('text-red-500', 'text-emerald-600');
+        setPwdMatchMsg.classList.add('text-slate-500');
+        return;
+      }
+
+      if (a === b) {
+        setPwdMatchMsg.textContent = 'Passwords match.';
+        setPwdMatchMsg.classList.remove('text-red-500', 'text-slate-500');
+        setPwdMatchMsg.classList.add('text-emerald-600');
+      } else {
+        setPwdMatchMsg.textContent = 'Passwords do not match.';
+        setPwdMatchMsg.classList.remove('text-emerald-600', 'text-slate-500');
+        setPwdMatchMsg.classList.add('text-red-500');
+      }
+    }
+    if (newPasswordInput && confirmPasswordInput) {
+      newPasswordInput.addEventListener('input', checkSetPwdMatch);
+      confirmPasswordInput.addEventListener('input', checkSetPwdMatch);
+    }
+
+    function togglePwdVisibility(inputId, btn) {
+      const input = document.getElementById(inputId);
+      if (!input) return;
+      const isHidden = input.type === 'password';
+      input.type = isHidden ? 'text' : 'password';
+      const icon = btn.querySelector('i');
+      if (icon && typeof lucide !== 'undefined') {
+        icon.setAttribute('data-lucide', isHidden ? 'eye-off' : 'eye');
+        lucide.createIcons({ targets: [icon] });
+      }
+    }
+
+    // -------- Delete Modal --------
     const deleteConfirmModal = document.getElementById('deleteConfirmModal');
     const deleteConfirmPanel = document.getElementById('deleteConfirmPanel');
     const deleteMemberNameEl = document.getElementById('deleteMemberNameDisplay');
     const confirmDeleteBtn   = document.getElementById('confirmDeleteBtn');
     let pendingDeleteId = null;
 
-    function confirmDeleteMember(memberId, memberName) {
-      pendingDeleteId = memberId;
-      if (deleteMemberNameEl) deleteMemberNameEl.textContent = '"' + memberName + '"';
+    function confirmDeleteMember(userId, name) {
+      pendingDeleteId = userId;
+      if (deleteMemberNameEl) deleteMemberNameEl.textContent = '"' + name + '"';
       deleteConfirmModal.classList.remove('hidden');
       document.body.classList.add('overflow-hidden');
       if (deleteConfirmPanel) { deleteConfirmPanel.classList.remove('animate-confirm-shake'); void deleteConfirmPanel.offsetWidth; deleteConfirmPanel.classList.add('animate-confirm-shake'); }
@@ -1301,15 +1472,16 @@ if ($conn instanceof mysqli) {
       if (input && form) { input.value = String(pendingDeleteId); form.submit(); }
     });
 
+    // -------- Deactivate Modal --------
     const deactivateConfirmModal = document.getElementById('deactivateConfirmModal');
     const deactivateConfirmPanel = document.getElementById('deactivateConfirmPanel');
     const deactivateMemberNameEl = document.getElementById('deactivateMemberNameDisplay');
     const confirmDeactivateBtn   = document.getElementById('confirmDeactivateBtn');
     let pendingDeactivateId = null;
 
-    function confirmDeactivate(memberId, memberName) {
-      pendingDeactivateId = memberId;
-      if (deactivateMemberNameEl) deactivateMemberNameEl.textContent = '"' + memberName + '"';
+    function confirmDeactivate(userId, name) {
+      pendingDeactivateId = userId;
+      if (deactivateMemberNameEl) deactivateMemberNameEl.textContent = '"' + name + '"';
       deactivateConfirmModal.classList.remove('hidden');
       document.body.classList.add('overflow-hidden');
       if (deactivateConfirmPanel) { deactivateConfirmPanel.classList.remove('animate-confirm-shake'); void deactivateConfirmPanel.offsetWidth; deactivateConfirmPanel.classList.add('animate-confirm-shake'); }
@@ -1324,29 +1496,7 @@ if ($conn instanceof mysqli) {
       if (input && form) { input.value = String(pendingDeactivateId); form.submit(); }
     });
 
-    const resetConfirmModal = document.getElementById('resetConfirmModal');
-    const resetConfirmPanel = document.getElementById('resetConfirmPanel');
-    const resetMemberNameEl = document.getElementById('resetMemberNameDisplay');
-    const confirmResetBtn   = document.getElementById('confirmResetBtn');
-    let pendingResetId = null;
-
-    function confirmResetPassword(memberId, memberName) {
-      pendingResetId = memberId;
-      if (resetMemberNameEl) resetMemberNameEl.textContent = '"' + memberName + '"';
-      resetConfirmModal.classList.remove('hidden');
-      document.body.classList.add('overflow-hidden');
-      if (resetConfirmPanel) { resetConfirmPanel.classList.remove('animate-confirm-shake'); void resetConfirmPanel.offsetWidth; resetConfirmPanel.classList.add('animate-confirm-shake'); }
-      setTimeout(function () { if (confirmResetBtn) confirmResetBtn.focus(); }, 80);
-      if (typeof lucide !== 'undefined') lucide.createIcons();
-    }
-    function closeResetModal() { resetConfirmModal.classList.add('hidden'); document.body.classList.remove('overflow-hidden'); pendingResetId = null; }
-    if (confirmResetBtn) confirmResetBtn.addEventListener('click', function () {
-      if (pendingResetId === null) return closeResetModal();
-      const input = document.getElementById('resetMemberId');
-      const form = document.getElementById('resetForm');
-      if (input && form) { input.value = String(pendingResetId); form.submit(); }
-    });
-
+    // -------- Live search --------
     (function () {
       const searchInput = document.getElementById('searchInput');
       const tableBody = document.getElementById('membersTableBody');
@@ -1359,12 +1509,13 @@ if ($conn instanceof mysqli) {
       });
     })();
 
+    // -------- Escape closes any modal --------
     document.addEventListener('keydown', function (e) {
       if (e.key !== 'Escape') return;
       if (memberModal && !memberModal.classList.contains('hidden')) closeMemberModal();
+      if (setPasswordModal && !setPasswordModal.classList.contains('hidden')) closeSetPasswordModal();
       if (deleteConfirmModal && !deleteConfirmModal.classList.contains('hidden')) closeDeleteModal();
       if (deactivateConfirmModal && !deactivateConfirmModal.classList.contains('hidden')) closeDeactivateModal();
-      if (resetConfirmModal && !resetConfirmModal.classList.contains('hidden')) closeResetModal();
     });
   </script>
 
