@@ -1,20 +1,16 @@
 <?php
 /**
- * management/dashboard.php
+ * management/grievance_reports.php
  * ---------------------------------------------------------------------------
- * Management Dashboard — Rajagiri College Grievance Redressal Portal
+ * Grievance Reports Navigation Page
+ * Rajagiri College Grievance Redressal Portal
  *
- * Auth Check : case-insensitive role match against MANAGEMENT
- *              (also accepts GRIEVANCE_MEMBER for legacy compatibility)
- * Profile    : Fetches name + profile_image from cell_members via LEFT JOIN
+ * Auth Check : role is MANAGEMENT or GRIEVANCE_MEMBER
  * ---------------------------------------------------------------------------
  */
 
 declare(strict_types=1);
 
-// ---------------------------------------------------------------------------
-// 1. SESSION START
-// ---------------------------------------------------------------------------
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
@@ -24,10 +20,9 @@ ini_set('display_startup_errors', '0');
 error_reporting(E_ALL);
 
 // ---------------------------------------------------------------------------
-// 2. AUTH GUARD
+// AUTH GUARD
 // ---------------------------------------------------------------------------
 $sessionRole = isset($_SESSION['role']) ? strtoupper((string) $_SESSION['role']) : '';
-
 $allowedRoles = ['MANAGEMENT', 'GRIEVANCE_MEMBER'];
 
 if (empty($_SESSION['user_id']) || !in_array($sessionRole, $allowedRoles, true)) {
@@ -38,53 +33,51 @@ if (empty($_SESSION['user_id']) || !in_array($sessionRole, $allowedRoles, true))
 $userId = (int) $_SESSION['user_id'];
 
 // ---------------------------------------------------------------------------
-// 3. DATABASE CONNECTION
+// DATABASE
 // ---------------------------------------------------------------------------
 $dbFile = __DIR__ . '/../db_connect.php';
+$conn   = null;
 
-$dbError = null;
-$conn    = null;
-
-if (!file_exists($dbFile)) {
-    $dbError = 'Database configuration file (db_connect.php) not found.';
-} else {
+if (file_exists($dbFile)) {
     require_once $dbFile;
+}
 
-    if (!isset($conn) || !($conn instanceof mysqli)) {
-        $conn = @new mysqli('localhost', 'root', '', 'grievance_db');
-        if ($conn->connect_error) {
-            $dbError = 'Database connection failed.';
-            $conn    = null;
-        } else {
-            $conn->set_charset('utf8mb4');
-        }
-    }
-
-    if ($conn && $conn->connect_errno) {
-        $dbError = 'Database connection failed.';
-        $conn    = null;
+if (!isset($conn) || !($conn instanceof mysqli)) {
+    $conn = @new mysqli('localhost', 'root', '', 'grievance_db');
+    if ($conn->connect_error) {
+        $conn = null;
+    } else {
+        $conn->set_charset('utf8mb4');
     }
 }
 
 // ---------------------------------------------------------------------------
-// 4. FETCH MEMBER PROFILE (users LEFT JOIN cell_members)
+// HELPERS
+// ---------------------------------------------------------------------------
+function e(?string $v): string
+{
+    return htmlspecialchars((string) $v, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+}
+
+// ---------------------------------------------------------------------------
+// FETCH MEMBER PROFILE
 // ---------------------------------------------------------------------------
 $memberData = [
-    'username'      => 'Member',
+    'username'      => $_SESSION['username'] ?? 'Member',
     'name'          => '',
     'email'         => '',
     'profile_image' => '',
     'member_type'   => '',
+    'has_cell_row'  => false,
 ];
 
-if ($conn instanceof mysqli) {
+if ($conn !== null) {
     try {
         $sql = "SELECT  u.username,
-                        u.role,
-                        cm.name            AS name,
-                        cm.email           AS email,
-                        cm.profile_image   AS profile_image,
-                        cm.member_type     AS member_type
+                        cm.name          AS name,
+                        cm.email         AS email,
+                        cm.profile_image AS profile_image,
+                        cm.member_type   AS member_type
                 FROM users u
                 LEFT JOIN cell_members cm ON cm.user_id = u.id
                 WHERE u.id = ?
@@ -98,16 +91,18 @@ if ($conn instanceof mysqli) {
 
             if ($res && $res->num_rows > 0) {
                 $row = $res->fetch_assoc();
-                $memberData['username']      = $row['username']      ?? 'Member';
+
+                $memberData['username']      = $row['username']      ?? $memberData['username'];
                 $memberData['name']          = $row['name']          ?? '';
                 $memberData['email']         = $row['email']         ?? '';
                 $memberData['profile_image'] = $row['profile_image'] ?? '';
                 $memberData['member_type']   = $row['member_type']   ?? '';
+                $memberData['has_cell_row']  = ($row['member_type'] !== null);
             }
             $stmt->close();
         }
     } catch (Throwable $ex) {
-        error_log('[Management Dashboard Profile] ' . $ex->getMessage());
+        error_log('[Reports Member Profile] ' . $ex->getMessage());
     }
 }
 
@@ -115,7 +110,7 @@ $displayName  = !empty($memberData['name']) ? $memberData['name'] : $memberData[
 $displayEmail = !empty($memberData['email']) ? $memberData['email'] : 'management@rajagiri.edu';
 
 // ---------------------------------------------------------------------------
-// 5. PROFILE PICTURE RESOLUTION
+// PROFILE PICTURE
 // ---------------------------------------------------------------------------
 $hasProfilePicture = false;
 $profilePictureUrl = '';
@@ -130,29 +125,13 @@ if (!empty($memberData['profile_image'])) {
         $profilePictureUrl = $browserPath;
     }
 }
-
-// ---------------------------------------------------------------------------
-// 6. NAVIGATION CARDS CONFIG
-// ---------------------------------------------------------------------------
-$navCards = [
-    ['title' => 'Grievance',         'icon' => 'clipboard-list', 'href' => 'grievances.php'],
-    ['title' => 'Grievance Reports', 'icon' => 'bar-chart-3',    'href' => 'grievance_reports.php'],
-];
-
-// ---------------------------------------------------------------------------
-// 7. HELPER
-// ---------------------------------------------------------------------------
-function e(?string $v): string
-{
-    return htmlspecialchars((string) $v, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
-}
 ?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Management Dashboard — Rajagiri College Grievance Portal</title>
+  <title>Grievance Reports | Rajagiri College Grievance Portal</title>
   <link rel="icon" type="image/svg+xml" href="../public/favicon.svg" />
 
   <script src="https://cdn.tailwindcss.com"></script>
@@ -166,7 +145,8 @@ function e(?string $v): string
             brandPurple: '#4A154B',
             brandPink:   '#E5097F',
             brandGreen:  '#006837',
-            brandGold:   '#C5A059'
+            brandGold:   '#C5A059',
+            softPurple:  '#EAE3F7'
           },
           keyframes: {
             fadeInUp: {
@@ -176,24 +156,11 @@ function e(?string $v): string
             dropdownFade: {
               '0%':   { opacity: '0', transform: 'translateY(-8px) scale(0.98)' },
               '100%': { opacity: '1', transform: 'translateY(0) scale(1)' }
-            },
-            modalFadeIn: {
-              '0%':   { opacity: '0', transform: 'scale(0.96)' },
-              '100%': { opacity: '1', transform: 'scale(1)' }
-            },
-            confirmShake: {
-              '0%, 100%': { transform: 'translateX(0)' },
-              '20%':      { transform: 'translateX(-6px)' },
-              '40%':      { transform: 'translateX(6px)' },
-              '60%':      { transform: 'translateX(-4px)' },
-              '80%':      { transform: 'translateX(4px)' }
             }
           },
           animation: {
             'fade-in-up': 'fadeInUp 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards',
-            'dropdown':   'dropdownFade 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards',
-            'modal-in':   'modalFadeIn 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards',
-            'confirm-shake': 'confirmShake 0.5s cubic-bezier(0.16, 1, 0.3, 1)'
+            'dropdown':   'dropdownFade 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards'
           }
         }
       }
@@ -207,7 +174,7 @@ function e(?string $v): string
 
   <div class="flex min-h-screen flex-1">
 
-    <!-- SIDEBAR (collapsible, matches parent/dashboard.php) -->
+    <!-- SIDEBAR -->
     <aside id="managementSidebar"
            class="w-20 bg-gradient-to-b from-[#4A154B] via-[#5A1B5C] to-[#006837]
                   flex flex-col py-4 shadow-2xl fixed inset-y-0 left-0 z-40
@@ -222,11 +189,9 @@ function e(?string $v): string
 
       <nav class="flex flex-col space-y-2 flex-1 w-full px-3">
 
-        <!-- Dashboard -->
         <a href="dashboard.php"
-           class="group relative w-full h-12 rounded-xl bg-white/20 backdrop-blur-sm
-                  flex items-center text-white shadow-lg ring-2 ring-white/30
-                  transition-all hover:bg-white/30 px-3">
+           class="group relative w-full h-12 rounded-xl bg-white/10 hover:bg-white/20
+                  flex items-center text-white transition-all px-3">
           <i data-lucide="home" class="w-6 h-6 flex-shrink-0"></i>
           <span class="sidebar-label ml-4 text-sm font-semibold whitespace-nowrap
                        opacity-0 w-0 overflow-hidden transition-all duration-200">
@@ -238,7 +203,6 @@ function e(?string $v): string
           </span>
         </a>
 
-        <!-- My Profile -->
         <a href="profile.php"
            class="group relative w-full h-12 rounded-xl bg-white/10 hover:bg-white/20
                   flex items-center text-white transition-all px-3">
@@ -253,7 +217,6 @@ function e(?string $v): string
           </span>
         </a>
 
-        <!-- Change Password -->
         <a href="change_password.php"
            class="group relative w-full h-12 rounded-xl bg-white/10 hover:bg-white/20
                   flex items-center text-white transition-all px-3">
@@ -270,7 +233,6 @@ function e(?string $v): string
 
       </nav>
 
-      <!-- Logout -->
       <a href="#"
          data-logout-trigger="1"
          id="sidebarLogoutBtn"
@@ -292,7 +254,7 @@ function e(?string $v): string
 
     </aside>
 
-    <!-- MAIN CONTENT WRAPPER -->
+    <!-- MAIN CONTENT -->
     <div id="managementMain" class="flex-1 ml-20 flex flex-col min-h-screen transition-all duration-300">
 
       <!-- TOP HEADER -->
@@ -313,7 +275,6 @@ function e(?string $v): string
                  class="hidden sm:block h-8 md:h-9 w-auto object-contain" />
           </div>
 
-          <!-- Profile dropdown -->
           <div class="relative" id="management-dropdown-container">
             <button id="management-dropdown-btn"
                     type="button"
@@ -408,66 +369,186 @@ function e(?string $v): string
       </header>
 
       <!-- PAGE CONTENT -->
-      <main class="flex-1 px-6 py-10">
+      <main class="flex-1 px-6 py-8">
 
-        <?php if ($dbError): ?>
-          <div class="max-w-5xl mx-auto mb-6 rounded-xl border-2 border-amber-200 bg-amber-50 px-4 py-3 flex items-start space-x-2">
-            <i data-lucide="alert-triangle" class="w-5 h-5 text-amber-500 flex-shrink-0 mt-0.5"></i>
-            <p class="text-sm text-amber-700"><?= e($dbError) ?></p>
-          </div>
-        <?php endif; ?>
+        <!-- Header Section -->
+        <div class="max-w-5xl mx-auto text-center mb-12 animate-fade-in-up">
 
-        <!-- Institution Title -->
-        <div class="text-center mb-12 animate-fade-in-up">
-          <h1 class="text-2xl md:text-3xl lg:text-4xl font-bold text-slate-800 mb-3 tracking-tight">
+          <h1 class="text-3xl md:text-4xl font-bold text-slate-800 mb-4 tracking-tight">
             Rajagiri College of Social Sciences
           </h1>
-          <h2 class="text-lg md:text-xl lg:text-2xl font-semibold text-slate-600">
-            Management Dashboard
-          </h2>
+
+          <nav class="flex items-center justify-center space-x-2 text-sm text-slate-600">
+            <a href="dashboard.php" class="flex items-center hover:text-[#8B1E7E] transition-colors font-medium">
+              <i data-lucide="layout-dashboard" class="w-4 h-4 mr-1.5"></i>
+              Dashboard
+            </a>
+            <i data-lucide="chevron-right" class="w-4 h-4 text-slate-400"></i>
+            <span class="text-[#E5097F] font-semibold">Grievance Reports</span>
+          </nav>
+
         </div>
 
-        <!-- NAVIGATION CARDS -->
-        <div class="flex flex-wrap items-center justify-center gap-6 md:gap-10 max-w-4xl mx-auto animate-fade-in-up" style="animation-delay: 80ms;">
+        <!-- Report Cards Grid -->
+        <div class="max-w-5xl mx-auto animate-fade-in-up" style="animation-delay: 80ms;">
 
-          <?php foreach ($navCards as $card): ?>
-            <a href="<?= e($card['href']) ?>"
-               class="group relative w-64 h-64 md:w-72 md:h-72 bg-gradient-to-br from-[#4A154B] via-[#8B1E7E] to-[#E5097F]
-                      rounded-3xl shadow-xl hover:shadow-2xl
-                      flex flex-col items-center justify-center text-white text-center
-                      transition-all duration-300 hover:scale-[1.03] hover:-translate-y-1 overflow-hidden">
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-8 lg:gap-12">
 
-              <div class="absolute -top-10 -right-10 w-32 h-32 bg-white/10 rounded-full group-hover:scale-150 transition-transform duration-500"></div>
-              <div class="absolute -bottom-12 -left-12 w-36 h-36 bg-white/5 rounded-full group-hover:scale-150 transition-transform duration-500"></div>
+            <!-- CARD 1: Complaint Report -->
+            <a href="complaint_report.php"
+               class="group flex items-center gap-6 p-6 rounded-2xl bg-white border border-slate-200/70
+                      shadow-md hover:shadow-2xl hover:-translate-y-1
+                      transition-all duration-300 ease-out">
 
-              <div class="relative flex flex-col items-center">
-                <div class="w-24 h-24 md:w-28 md:h-28 rounded-3xl bg-white/20 backdrop-blur-sm
-                            flex items-center justify-center mb-6
-                            group-hover:bg-white/30 group-hover:scale-110 transition-all duration-300">
-                  <i data-lucide="<?= e($card['icon']) ?>" class="w-12 h-12 md:w-14 md:h-14"></i>
+              <!-- Icon container -->
+              <div class="relative flex-shrink-0">
+                <div class="w-28 h-28 md:w-32 md:h-32 rounded-2xl bg-[#EAE3F7]
+                            flex items-center justify-center
+                            group-hover:scale-105 transition-transform duration-300">
+                  <!-- Illustration: documents + magnifier + person -->
+                  <svg viewBox="0 0 120 120" class="w-20 h-20 md:w-24 md:h-24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <!-- Back document -->
+                    <rect x="34" y="22" width="46" height="62" rx="4" fill="#FFFFFF" stroke="#B8A9D9" stroke-width="2"/>
+                    <!-- Lines on back document -->
+                    <rect x="42" y="32" width="30" height="3" rx="1.5" fill="#D9CFEF"/>
+                    <rect x="42" y="40" width="24" height="3" rx="1.5" fill="#D9CFEF"/>
+                    <rect x="42" y="48" width="28" height="3" rx="1.5" fill="#D9CFEF"/>
+                    <rect x="42" y="56" width="20" height="3" rx="1.5" fill="#D9CFEF"/>
+                    <!-- Checkmark -->
+                    <circle cx="66" cy="70" r="7" fill="#7ED0B1"/>
+                    <path d="M63 70l2.5 2.5L70 67" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+
+                    <!-- Front document -->
+                    <rect x="46" y="30" width="46" height="62" rx="4" fill="#FFFFFF" stroke="#8B7BC0" stroke-width="2"/>
+                    <rect x="54" y="40" width="30" height="3" rx="1.5" fill="#C5B7E0"/>
+                    <rect x="54" y="48" width="24" height="3" rx="1.5" fill="#C5B7E0"/>
+                    <rect x="54" y="56" width="28" height="3" rx="1.5" fill="#C5B7E0"/>
+
+                    <!-- Magnifying glass -->
+                    <circle cx="72" cy="76" r="11" fill="#FFFFFF" stroke="#4A154B" stroke-width="2.5"/>
+                    <circle cx="72" cy="76" r="7" fill="#EAE3F7" opacity="0.6"/>
+                    <line x1="80" y1="84" x2="88" y2="92" stroke="#4A154B" stroke-width="3" stroke-linecap="round"/>
+
+                    <!-- Person -->
+                    <circle cx="28" cy="72" r="6" fill="#F5D6B0"/>
+                    <path d="M18 96c0-6 5-10 10-10s10 4 10 10" fill="#7ED0B1"/>
+                    <rect x="22" y="60" width="12" height="10" rx="3" fill="#4A154B" opacity="0.85"/>
+
+                    <!-- Small papers near person -->
+                    <rect x="14" y="82" width="18" height="10" rx="2" fill="#FFFFFF" stroke="#B8A9D9" stroke-width="1.5" transform="rotate(-12 23 87)"/>
+                    <rect x="24" y="86" width="16" height="9" rx="2" fill="#FFFFFF" stroke="#B8A9D9" stroke-width="1.5" transform="rotate(8 32 90)"/>
+                  </svg>
                 </div>
 
-                <p class="text-xl md:text-2xl font-bold tracking-wide leading-tight px-4">
-                  <?= e($card['title']) ?>
+                <!-- Star badge -->
+                <div class="absolute -top-1 -right-1 w-7 h-7 rounded-full bg-white shadow-md
+                            flex items-center justify-center">
+                  <i data-lucide="star" class="w-4 h-4 text-[#B8A9D9] fill-[#B8A9D9]"></i>
+                </div>
+              </div>
+
+              <!-- Text content -->
+              <div class="min-w-0 flex-1">
+                <h3 class="text-lg md:text-xl font-bold text-slate-800 mb-2
+                           group-hover:text-[#4A154B] transition-colors">
+                  Complaint Report
+                </h3>
+                <p class="text-sm md:text-base font-semibold text-[#E5097F]
+                          group-hover:underline transition-all">
+                  click here to open
                 </p>
               </div>
+
             </a>
-          <?php endforeach; ?>
+
+            <!-- CARD 2: Cell Members Report -->
+            <a href="cell_members_report.php"
+               class="group flex items-center gap-6 p-6 rounded-2xl bg-white border border-slate-200/70
+                      shadow-md hover:shadow-2xl hover:-translate-y-1
+                      transition-all duration-300 ease-out">
+
+              <!-- Icon container -->
+              <div class="relative flex-shrink-0">
+                <div class="w-28 h-28 md:w-32 md:h-32 rounded-2xl bg-[#EAE3F7]
+                            flex items-center justify-center
+                            group-hover:scale-105 transition-transform duration-300">
+                  <!-- Illustration: clipboard with checklist -->
+                  <svg viewBox="0 0 120 120" class="w-20 h-20 md:w-24 md:h-24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <!-- Clipboard body -->
+                    <rect x="30" y="22" width="60" height="80" rx="6" fill="#FFFFFF" stroke="#8B7BC0" stroke-width="2"/>
+                    <!-- Clipboard top bar -->
+                    <rect x="30" y="22" width="60" height="14" rx="6" fill="#D9CFEF"/>
+                    <rect x="30" y="30" width="60" height="6" fill="#D9CFEF"/>
+                    <!-- Clipboard clip -->
+                    <rect x="48" y="16" width="24" height="12" rx="3" fill="#B8A9D9" stroke="#8B7BC0" stroke-width="1.5"/>
+                    <circle cx="60" cy="22" r="2" fill="#FFFFFF"/>
+
+                    <!-- Checkbox rows -->
+                    <g transform="translate(38, 48)">
+                      <!-- Row 1 -->
+                      <rect x="0" y="0" width="10" height="10" rx="2" fill="#F0FDF4" stroke="#4ADE80" stroke-width="1.5"/>
+                      <path d="M2.5 5l2 2 3.5-4" stroke="#16A34A" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+                      <rect x="16" y="2" width="26" height="3" rx="1.5" fill="#E5E5E5"/>
+                      <rect x="16" y="7" width="20" height="2.5" rx="1.25" fill="#F0F0F0"/>
+
+                      <!-- Row 2 -->
+                      <rect x="0" y="16" width="10" height="10" rx="2" fill="#F0FDF4" stroke="#4ADE80" stroke-width="1.5"/>
+                      <path d="M2.5 21l2 2 3.5-4" stroke="#16A34A" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+                      <rect x="16" y="18" width="28" height="3" rx="1.5" fill="#E5E5E5"/>
+                      <rect x="16" y="23" width="22" height="2.5" rx="1.25" fill="#F0F0F0"/>
+
+                      <!-- Row 3 -->
+                      <rect x="0" y="32" width="10" height="10" rx="2" fill="#F0FDF4" stroke="#4ADE80" stroke-width="1.5"/>
+                      <path d="M2.5 37l2 2 3.5-4" stroke="#16A34A" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+                      <rect x="16" y="34" width="24" height="3" rx="1.5" fill="#E5E5E5"/>
+                      <rect x="16" y="39" width="18" height="2.5" rx="1.25" fill="#F0F0F0"/>
+
+                      <!-- Row 4 -->
+                      <rect x="0" y="48" width="10" height="10" rx="2" fill="#F0FDF4" stroke="#4ADE80" stroke-width="1.5"/>
+                      <path d="M2.5 53l2 2 3.5-4" stroke="#16A34A" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+                      <rect x="16" y="50" width="26" height="3" rx="1.5" fill="#E5E5E5"/>
+                      <rect x="16" y="55" width="20" height="2.5" rx="1.25" fill="#F0F0F0"/>
+                    </g>
+                  </svg>
+                </div>
+
+                <!-- Star badge -->
+                <div class="absolute -top-1 -right-1 w-7 h-7 rounded-full bg-white shadow-md
+                            flex items-center justify-center">
+                  <i data-lucide="star" class="w-4 h-4 text-[#B8A9D9] fill-[#B8A9D9]"></i>
+                </div>
+              </div>
+
+              <!-- Text content -->
+              <div class="min-w-0 flex-1">
+                <h3 class="text-lg md:text-xl font-bold text-slate-800 mb-2
+                           group-hover:text-[#4A154B] transition-colors">
+                  Cell Members Report
+                </h3>
+                <p class="text-sm md:text-base font-semibold text-[#E5097F]
+                          group-hover:underline transition-all">
+                  click here to open
+                </p>
+              </div>
+
+            </a>
+
+          </div>
 
         </div>
 
       </main>
 
       <!-- FOOTER -->
-      <footer class="bg-gradient-to-r from-purple-200 via-pink-100 to-purple-200 border-t border-purple-200/60 mt-auto">
+      <footer class="bg-[#EAE3F7] border-t border-purple-200/60 mt-auto">
         <div class="px-6 py-6">
-          <div class="max-w-7xl mx-auto text-center">
-            <p class="text-xs md:text-sm text-slate-800">
+          <div class="max-w-7xl mx-auto text-center space-y-1">
+            <p class="text-sm text-slate-800">
               Copyright &copy; <?= date('Y') ?>
-              <span class="font-bold text-[#006837]">Rajagiri College of Social Sciences</span>.
-              <span class="ml-1">All rights reserved.</span>
+              <span class="font-bold">Rajagiri College of Social Sciences</span> .
+              All rights reserved.
             </p>
-            <p class="text-xs md:text-sm text-slate-700 mt-1">
+            <p class="text-sm text-slate-800">
               Powered by
               <span class="font-bold bg-gradient-to-r from-[#4A154B] to-[#E5097F] bg-clip-text text-transparent ml-1">
                 Orell
@@ -480,15 +561,11 @@ function e(?string $v): string
     </div>
   </div>
 
-  <!-- ============================================================ -->
-  <!-- CUSTOM LOGOUT CONFIRMATION MODAL                              -->
-  <!-- ============================================================ -->
-  <div id="logoutConfirmModal" class="hidden fixed inset-0 z-[70] flex items-center justify-center p-4">
+  <!-- LOGOUT CONFIRMATION MODAL -->
+  <div id="logoutConfirmModal" class="hidden fixed inset-0 z-[90] flex items-center justify-center p-4">
     <div class="absolute inset-0 bg-black/50 backdrop-blur-sm" onclick="closeLogoutModal()"></div>
 
-    <div id="logoutConfirmPanel"
-         class="relative w-full max-w-md bg-white rounded-2xl shadow-2xl animate-modal-in overflow-hidden">
-
+    <div class="relative w-full max-w-md bg-white rounded-2xl shadow-2xl overflow-hidden">
       <div class="h-1.5 w-full bg-gradient-to-r from-[#6A2C8A] via-[#8B1E7E] to-[#C43A7A]"></div>
 
       <div class="px-6 pt-6 pb-2 flex flex-col items-center text-center">
@@ -502,7 +579,6 @@ function e(?string $v): string
         <p class="text-sm text-slate-500 leading-relaxed">
           You are about to log out of
           <span class="font-bold text-[#8B1E7E] break-words"><?= e($displayName) ?></span>.
-          Any unsaved changes will be lost.
         </p>
 
         <p class="text-xs text-slate-400 font-medium mt-3 flex items-center gap-1.5">
@@ -541,9 +617,7 @@ function e(?string $v): string
       lucide.createIcons();
     }
 
-    // ============================================================
-    // SIDEBAR EXPAND / COLLAPSE
-    // ============================================================
+    /* ---------------- Sidebar toggle ---------------- */
     (function () {
       const toggleBtn = document.getElementById('sidebarToggle');
       const sidebar   = document.getElementById('managementSidebar');
@@ -582,15 +656,11 @@ function e(?string $v): string
           tooltips.forEach(function (el) { el.classList.remove('hidden'); });
         }
 
-        setTimeout(function () {
-          if (typeof lucide !== 'undefined') lucide.createIcons();
-        }, 250);
+        setTimeout(function () { if (typeof lucide !== 'undefined') lucide.createIcons(); }, 250);
       });
     })();
 
-    // ============================================================
-    // PROFILE DROPDOWN
-    // ============================================================
+    /* ---------------- Profile dropdown ---------------- */
     (function () {
       const btn       = document.getElementById('management-dropdown-btn');
       const menu      = document.getElementById('management-dropdown-menu');
@@ -604,12 +674,10 @@ function e(?string $v): string
         const isOpen = !menu.classList.contains('hidden');
         if (isOpen) {
           menu.classList.add('hidden');
-          menu.classList.remove('animate-dropdown');
           if (chevron) chevron.classList.remove('rotate-180');
           btn.setAttribute('aria-expanded', 'false');
         } else {
           menu.classList.remove('hidden');
-          menu.classList.add('animate-dropdown');
           if (chevron) chevron.classList.add('rotate-180');
           btn.setAttribute('aria-expanded', 'true');
         }
@@ -618,7 +686,6 @@ function e(?string $v): string
       document.addEventListener('click', function (e) {
         if (!container.contains(e.target)) {
           menu.classList.add('hidden');
-          menu.classList.remove('animate-dropdown');
           if (chevron) chevron.classList.remove('rotate-180');
           btn.setAttribute('aria-expanded', 'false');
         }
@@ -627,33 +694,20 @@ function e(?string $v): string
       document.addEventListener('keydown', function (e) {
         if (e.key === 'Escape') {
           menu.classList.add('hidden');
-          menu.classList.remove('animate-dropdown');
           if (chevron) chevron.classList.remove('rotate-180');
           btn.setAttribute('aria-expanded', 'false');
         }
       });
     })();
 
-    // ============================================================
-    // LOGOUT CONFIRMATION MODAL
-    // ============================================================
+    /* ---------------- Logout ---------------- */
     const logoutConfirmModal = document.getElementById('logoutConfirmModal');
-    const logoutConfirmPanel = document.getElementById('logoutConfirmPanel');
     const confirmLogoutBtn   = document.getElementById('confirmLogoutBtn');
-
     const LOGOUT_URL = '../logout.php?role=management';
 
     function openLogoutModal() {
       logoutConfirmModal.classList.remove('hidden');
       document.body.classList.add('overflow-hidden');
-
-      if (logoutConfirmPanel) {
-        logoutConfirmPanel.classList.remove('animate-confirm-shake');
-        void logoutConfirmPanel.offsetWidth;
-        logoutConfirmPanel.classList.add('animate-confirm-shake');
-      }
-
-      setTimeout(function () { if (confirmLogoutBtn) confirmLogoutBtn.focus(); }, 80);
       if (typeof lucide !== 'undefined') lucide.createIcons();
     }
 
