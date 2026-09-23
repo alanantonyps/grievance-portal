@@ -67,21 +67,6 @@ function e(?string $v): string
 }
 
 // ---------------------------------------------------------------------------
-// FLASH
-// ---------------------------------------------------------------------------
-$flashSuccess = '';
-$flashError   = '';
-
-if (!empty($_SESSION['flash_success'])) {
-    $flashSuccess = (string) $_SESSION['flash_success'];
-    unset($_SESSION['flash_success']);
-}
-if (!empty($_SESSION['flash_error'])) {
-    $flashError = (string) $_SESSION['flash_error'];
-    unset($_SESSION['flash_error']);
-}
-
-// ---------------------------------------------------------------------------
 // MEMBER PROFILE
 // ---------------------------------------------------------------------------
 $memberData = [
@@ -94,11 +79,13 @@ $memberData = [
     'grievance_type_name' => '',
     'designation_name'    => '',
     'has_cell_row'        => false,
+    'cell_member_id'      => 0,
 ];
 
 if ($conn !== null) {
     try {
         $sql = "SELECT  u.username,
+                        cm.id                 AS cell_member_id,
                         cm.name               AS name,
                         cm.email              AS email,
                         cm.profile_image      AS profile_image,
@@ -123,6 +110,7 @@ if ($conn !== null) {
                 $row = $res->fetch_assoc();
 
                 $memberData['username']            = $row['username']            ?? $memberData['username'];
+                $memberData['cell_member_id']      = (int) ($row['cell_member_id'] ?? 0);
                 $memberData['name']                = $row['name']                ?? '';
                 $memberData['email']               = $row['email']               ?? '';
                 $memberData['profile_image']       = $row['profile_image']       ?? '';
@@ -147,11 +135,369 @@ $memberTypeUpper         = strtoupper((string) $memberData['member_type']);
 $memberGrievanceTypeId   = (int) $memberData['grievance_type_id'];
 $memberGrievanceTypeName = (string) $memberData['grievance_type_name'];
 $hasCellRow              = (bool) $memberData['has_cell_row'];
+$myCellMemberId          = (int) $memberData['cell_member_id'];
 
 $isManagement = ($memberTypeUpper === 'MANAGEMENT');
 $hasTypeAssignment = (!$isManagement && $memberGrievanceTypeId > 0);
 $canViewAnything = ($isManagement || $hasTypeAssignment);
 $roleLabel = $isManagement ? 'Management Member' : 'Grievance Member';
+
+// ===========================================================================
+// SELF-POST HANDLERS
+// ===========================================================================
+if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST' && isset($_POST['form_action'])) {
+
+    $formAction = (string) $_POST['form_action'];
+
+    $redirectWith = function (string $msg, bool $isError = false): void {
+        if ($msg !== '') {
+            if ($isError) $_SESSION['flash_error']   = $msg;
+            else          $_SESSION['flash_success'] = $msg;
+        }
+        header('Location: grievances.php');
+        exit;
+    };
+
+    // ---------------------------------------------------------------------
+    // HANDLER A: REPLY GRIEVANCE
+    // ---------------------------------------------------------------------
+    if ($formAction === 'reply_grievance') {
+
+        if ($conn === null) {
+            $redirectWith('Database connection failed.', true);
+        }
+
+        $grievanceId = isset($_POST['grievance_id']) ? (int) $_POST['grievance_id'] : 0;
+        $replyText   = isset($_POST['reply'])        ? trim((string) $_POST['reply']) : '';
+
+        if ($grievanceId <= 0) {
+            $redirectWith('Invalid grievance reference.', true);
+        }
+        if ($replyText === '') {
+            $redirectWith('Reply text is required.', true);
+        }
+        if (mb_strlen($replyText) > 120) {
+            $redirectWith('Reply must not exceed 120 characters.', true);
+        }
+
+        $grievance = null;
+        try {
+            $stmt = $conn->prepare("SELECT id, grievance_type_id, reply_attachment_path
+                                    FROM grievances WHERE id = ? LIMIT 1");
+            if ($stmt) {
+                $stmt->bind_param('i', $grievanceId);
+                $stmt->execute();
+                $res = $stmt->get_result();
+                $grievance = $res ? $res->fetch_assoc() : null;
+                $stmt->close();
+            }
+        } catch (Throwable $ex) {
+            error_log('[Reply Handler — fetch grievance] ' . $ex->getMessage());
+        }
+
+        if (!$grievance) {
+            $redirectWith('Grievance not found.', true);
+        }
+
+        if (!$isManagement) {
+            if ($memberGrievanceTypeId <= 0 || $memberGrievanceTypeId !== (int) $grievance['grievance_type_id']) {
+                $redirectWith('You are not authorized to reply to this grievance.', true);
+            }
+        }
+
+        $newAttachmentRelPath = null;
+        $uploadError          = null;
+
+        if (!empty($_FILES['attachment']) && isset($_FILES['attachment']['error'])) {
+            $file = $_FILES['attachment'];
+
+            if ($file['error'] === UPLOAD_ERR_NO_FILE) {
+                // nothing
+            } elseif ($file['error'] !== UPLOAD_ERR_OK) {
+                $uploadError = 'File upload failed (error code: ' . $file['error'] . ').';
+            } else {
+                $maxBytes = 5 * 1024 * 1024;
+                if ((int) $file['size'] > $maxBytes) {
+                    $uploadError = 'File is larger than 5 MB.';
+                } else {
+                    $allowedExt = ['pdf', 'jpg', 'jpeg', 'png', 'doc', 'docx'];
+                    $originalName = (string) $file['name'];
+                    $ext = strtolower(pathinfo($originalName, PATHINFO_EXTENSION));
+
+                    if (!in_array($ext, $allowedExt, true)) {
+                        $uploadError = 'Only PDF, JPG, JPEG, PNG, DOC, DOCX files are allowed.';
+                    } else {
+                        $allowedMimes = [
+                            'application/pdf',
+                            'image/jpeg',
+                            'image/png',
+                            'application/msword',
+                            'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                        ];
+                        $finfo = function_exists('finfo_open') ? finfo_open(FILEINFO_MIME_TYPE) : null;
+                        $mime  = $finfo ? finfo_file($finfo, $file['tmp_name']) : '';
+                        if ($finfo) finfo_close($finfo);
+
+                        if ($mime !== '' && !in_array(strtolower($mime), $allowedMimes, true)) {
+                            if (!($ext === 'docx' && strtolower($mime) === 'application/octet-stream')) {
+                                $uploadError = 'Unsupported file type.';
+                            }
+                        }
+
+                        if ($uploadError === null) {
+                            $uploadDirAbs = __DIR__ . '/../uploads/replies/';
+                            if (!is_dir($uploadDirAbs)) {
+                                @mkdir($uploadDirAbs, 0775, true);
+                            }
+
+                            if (!is_dir($uploadDirAbs) || !is_writable($uploadDirAbs)) {
+                                $uploadError = 'Upload folder is not writable. Contact administrator.';
+                            } else {
+                                $baseName = pathinfo($originalName, PATHINFO_FILENAME);
+                                $baseName = preg_replace('/[^A-Za-z0-9_\-]+/', '_', $baseName);
+                                $baseName = trim((string) $baseName, '_');
+                                if ($baseName === '') $baseName = 'file';
+
+                                $random   = bin2hex(random_bytes(4));
+                                $filename = 'reply_' . $grievanceId . '_' . time() . '_' . $random . '_' . $baseName . '.' . $ext;
+                                $targetAbs = $uploadDirAbs . $filename;
+
+                                if (!move_uploaded_file($file['tmp_name'], $targetAbs)) {
+                                    $uploadError = 'Could not save the uploaded file.';
+                                } else {
+                                    @chmod($targetAbs, 0644);
+                                    $newAttachmentRelPath = 'uploads/replies/' . $filename;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if ($uploadError !== null) {
+            $redirectWith($uploadError, true);
+        }
+
+        $oldAttachment = (string) ($grievance['reply_attachment_path'] ?? '');
+        $newStatus     = 'Closed';
+
+        try {
+            $conn->begin_transaction();
+
+            if ($newAttachmentRelPath !== null) {
+                if ($myCellMemberId > 0) {
+                    $sql = "UPDATE grievances
+                            SET reply_details = ?, reply_attachment_path = ?, status = ?,
+                                attended_by = ?, updated_at = NOW()
+                            WHERE id = ?";
+                    $stmt = $conn->prepare($sql);
+                    if (!$stmt) throw new RuntimeException('Prepare failed: ' . $conn->error);
+                    $stmt->bind_param('sssii', $replyText, $newAttachmentRelPath, $newStatus, $myCellMemberId, $grievanceId);
+                } else {
+                    $sql = "UPDATE grievances
+                            SET reply_details = ?, reply_attachment_path = ?, status = ?,
+                                updated_at = NOW()
+                            WHERE id = ?";
+                    $stmt = $conn->prepare($sql);
+                    if (!$stmt) throw new RuntimeException('Prepare failed: ' . $conn->error);
+                    $stmt->bind_param('sssi', $replyText, $newAttachmentRelPath, $newStatus, $grievanceId);
+                }
+            } else {
+                if ($myCellMemberId > 0) {
+                    $sql = "UPDATE grievances
+                            SET reply_details = ?, status = ?, attended_by = ?, updated_at = NOW()
+                            WHERE id = ?";
+                    $stmt = $conn->prepare($sql);
+                    if (!$stmt) throw new RuntimeException('Prepare failed: ' . $conn->error);
+                    $stmt->bind_param('ssii', $replyText, $newStatus, $myCellMemberId, $grievanceId);
+                } else {
+                    $sql = "UPDATE grievances
+                            SET reply_details = ?, status = ?, updated_at = NOW()
+                            WHERE id = ?";
+                    $stmt = $conn->prepare($sql);
+                    if (!$stmt) throw new RuntimeException('Prepare failed: ' . $conn->error);
+                    $stmt->bind_param('ssi', $replyText, $newStatus, $grievanceId);
+                }
+            }
+
+            if (!$stmt->execute()) {
+                throw new RuntimeException('Update failed: ' . $stmt->error);
+            }
+            $stmt->close();
+
+            $conn->commit();
+
+            if ($newAttachmentRelPath !== null && $oldAttachment !== '') {
+                $oldAbs = __DIR__ . '/../' . ltrim($oldAttachment, '/');
+                if (is_file($oldAbs)) @unlink($oldAbs);
+            }
+
+        } catch (Throwable $ex) {
+            if ($conn) @$conn->rollback();
+            error_log('[Reply Handler — transaction] ' . $ex->getMessage());
+
+            if ($newAttachmentRelPath !== null) {
+                $abs = __DIR__ . '/../' . $newAttachmentRelPath;
+                if (is_file($abs)) @unlink($abs);
+            }
+
+            $redirectWith('Could not save the reply. Please try again.', true);
+        }
+
+        $redirectWith('Reply submitted successfully. Grievance marked as Closed.', false);
+    }
+
+    // ---------------------------------------------------------------------
+    // HANDLER B: ACTION SUMMARY
+    // ---------------------------------------------------------------------
+    if ($formAction === 'action_summary') {
+
+        if ($conn === null) {
+            $redirectWith('Database connection failed.', true);
+        }
+
+        $grievanceId = isset($_POST['grievance_id']) ? (int) $_POST['grievance_id'] : 0;
+        $actionDate  = isset($_POST['action_date'])  ? trim((string) $_POST['action_date']) : '';
+        $attendeeId  = isset($_POST['attendee'])     ? (int) $_POST['attendee'] : 0;
+
+        $summaries = $_POST['action_summary'] ?? [];
+        if (!is_array($summaries)) $summaries = [$summaries];
+
+        $takenList = $_POST['action_taken'] ?? [];
+        if (!is_array($takenList)) $takenList = [$takenList];
+
+        $pairs = [];
+        $max   = max(count($summaries), count($takenList));
+        for ($i = 0; $i < $max; $i++) {
+            $summ  = isset($summaries[$i]) ? trim((string) $summaries[$i]) : '';
+            $taken = isset($takenList[$i]) ? trim((string) $takenList[$i]) : '';
+            if ($summ === '') continue;
+            $pairs[] = ['summary' => $summ, 'action_taken' => $taken];
+        }
+
+        if ($grievanceId <= 0) {
+            $redirectWith('Invalid grievance reference.', true);
+        }
+        if ($actionDate === '' || !preg_match('/^\d{4}-\d{2}-\d{2}$/', $actionDate)) {
+            $redirectWith('Please provide a valid date.', true);
+        }
+        $d = DateTime::createFromFormat('Y-m-d', $actionDate);
+        if (!$d || $d->format('Y-m-d') !== $actionDate) {
+            $redirectWith('Invalid date value.', true);
+        }
+        if ($attendeeId <= 0) {
+            $redirectWith('Please select an attendee.', true);
+        }
+        if (empty($pairs)) {
+            $redirectWith('At least one grievance summary is required.', true);
+        }
+        foreach ($pairs as $p) {
+            if (mb_strlen($p['summary']) > 1000 || mb_strlen($p['action_taken']) > 1000) {
+                $redirectWith('Each field must not exceed 1000 characters.', true);
+            }
+        }
+
+        $grievance = null;
+        try {
+            $stmt = $conn->prepare("SELECT id, grievance_type_id FROM grievances WHERE id = ? LIMIT 1");
+            if ($stmt) {
+                $stmt->bind_param('i', $grievanceId);
+                $stmt->execute();
+                $res = $stmt->get_result();
+                $grievance = $res ? $res->fetch_assoc() : null;
+                $stmt->close();
+            }
+        } catch (Throwable $ex) {
+            error_log('[Action Handler — fetch grievance] ' . $ex->getMessage());
+        }
+        if (!$grievance) {
+            $redirectWith('Grievance not found.', true);
+        }
+
+        $attendeeOk = false;
+        try {
+            $stmt = $conn->prepare("SELECT id FROM cell_members WHERE id = ? LIMIT 1");
+            if ($stmt) {
+                $stmt->bind_param('i', $attendeeId);
+                $stmt->execute();
+                $res = $stmt->get_result();
+                $attendeeOk = $res && $res->num_rows > 0;
+                $stmt->close();
+            }
+        } catch (Throwable $ex) {
+            error_log('[Action Handler — verify attendee] ' . $ex->getMessage());
+        }
+        if (!$attendeeOk) {
+            $redirectWith('Selected attendee is invalid.', true);
+        }
+
+        if (!$isManagement) {
+            if ($memberGrievanceTypeId <= 0 || $memberGrievanceTypeId !== (int) $grievance['grievance_type_id']) {
+                $redirectWith('You are not authorized for this grievance.', true);
+            }
+        }
+
+        try {
+            $conn->begin_transaction();
+
+            $stmt = $conn->prepare("INSERT INTO grievance_actions
+                                      (grievance_id, action_date, attendee_id, summary, action_taken, created_by, created_at)
+                                    VALUES (?, ?, ?, ?, ?, ?, NOW())");
+            if (!$stmt) throw new RuntimeException('Prepare failed: ' . $conn->error);
+
+            foreach ($pairs as $p) {
+                $stmt->bind_param(
+                    'isissi',
+                    $grievanceId,
+                    $actionDate,
+                    $attendeeId,
+                    $p['summary'],
+                    $p['action_taken'],
+                    $userId
+                );
+                if (!$stmt->execute()) {
+                    throw new RuntimeException('Insert failed: ' . $stmt->error);
+                }
+            }
+            $stmt->close();
+
+            $touch = $conn->prepare("UPDATE grievances SET updated_at = NOW() WHERE id = ?");
+            if ($touch) {
+                $touch->bind_param('i', $grievanceId);
+                $touch->execute();
+                $touch->close();
+            }
+
+            $conn->commit();
+
+        } catch (Throwable $ex) {
+            if ($conn) @$conn->rollback();
+            error_log('[Action Handler — transaction] ' . $ex->getMessage());
+            $redirectWith('Could not save the action summary. Please try again.', true);
+        }
+
+        $count = count($pairs);
+        $redirectWith($count . ' action summar' . ($count === 1 ? 'y' : 'ies') . ' saved successfully.', false);
+    }
+
+    // NOTE: reopen_grievance handler removed — reopen is a student-only action.
+}
+
+// ---------------------------------------------------------------------------
+// FLASH
+// ---------------------------------------------------------------------------
+$flashSuccess = '';
+$flashError   = '';
+
+if (!empty($_SESSION['flash_success'])) {
+    $flashSuccess = (string) $_SESSION['flash_success'];
+    unset($_SESSION['flash_success']);
+}
+if (!empty($_SESSION['flash_error'])) {
+    $flashError = (string) $_SESSION['flash_error'];
+    unset($_SESSION['flash_error']);
+}
 
 // ---------------------------------------------------------------------------
 // PROFILE PICTURE
@@ -177,21 +523,14 @@ $allCellMembers = [];
 
 if ($conn !== null) {
     try {
-        $sql = "SELECT  cm.id,
-                        cm.user_id,
-                        cm.name,
-                        cm.email,
-                        cm.member_type,
+        $sql = "SELECT  cm.id, cm.user_id, cm.name, cm.email, cm.member_type,
                         d.designation_name
                 FROM cell_members cm
                 LEFT JOIN designations d ON d.id = cm.designation_id
                 ORDER BY cm.name ASC";
-
         $res = $conn->query($sql);
         if ($res) {
-            while ($r = $res->fetch_assoc()) {
-                $allCellMembers[] = $r;
-            }
+            while ($r = $res->fetch_assoc()) $allCellMembers[] = $r;
             $res->free();
         }
     } catch (Throwable $ex) {
@@ -200,52 +539,25 @@ if ($conn !== null) {
 }
 
 // ---------------------------------------------------------------------------
-// FETCH GRIEVANCES
+// FETCH GRIEVANCES (now includes reopen_reason)
 // ---------------------------------------------------------------------------
 $grievances = [];
 
 if ($conn !== null && $canViewAnything) {
     try {
-        $baseSelect = "SELECT  g.id                AS grievance_id,
-                                g.grievance_number,
-                                g.grievance_type_id,
-                                g.subject,
-                                g.description,
-                                g.status,
-                                g.attachment_path,
-                                g.reply_details,
-                                g.reply_attachment_path,
-                                g.assigned_member_id,
-                                g.attended_by,
-                                g.created_at,
-                                g.updated_at,
-
-                                gt.type_name        AS grievance_type_name,
-                                u.role              AS complainant_role,
-                                u.username          AS complainant_username,
-
-                                COALESCE(
-                                    st.name,
-                                    p.name,
-                                    sf.name,
-                                    ap.name,
-                                    u.username
-                                )                   AS complainant_name,
-
-                                COALESCE(
-                                    st.email,
-                                    p.email,
-                                    sf.email,
-                                    ap.email,
-                                    u.username
-                                )                   AS complainant_email,
-
-                                COALESCE(
-                                    st.contact_number,
-                                    p.contact_number,
-                                    sf.contact_number
-                                )                   AS complainant_phone
-
+        $baseSelect = "SELECT  g.id AS grievance_id,
+                                g.grievance_number, g.grievance_type_id,
+                                g.subject, g.description, g.status,
+                                g.attachment_path, g.reply_details, g.reply_attachment_path,
+                                g.reopen_reason,
+                                g.assigned_member_id, g.attended_by,
+                                g.created_at, g.updated_at,
+                                gt.type_name AS grievance_type_name,
+                                u.role AS complainant_role,
+                                u.username AS complainant_username,
+                                COALESCE(st.name, p.name, sf.name, ap.name, u.username) AS complainant_name,
+                                COALESCE(st.email, p.email, sf.email, ap.email, u.username) AS complainant_email,
+                                COALESCE(st.contact_number, p.contact_number, sf.contact_number) AS complainant_phone
                         FROM grievances g
                         INNER JOIN grievance_types gt ON g.grievance_type_id = gt.id
                         INNER JOIN users u            ON g.complainant_user_id = u.id
@@ -260,9 +572,7 @@ if ($conn !== null && $canViewAnything) {
             if ($stmt) {
                 $stmt->execute();
                 $res = $stmt->get_result();
-                while ($row = $res->fetch_assoc()) {
-                    $grievances[] = $row;
-                }
+                while ($row = $res->fetch_assoc()) $grievances[] = $row;
                 $stmt->close();
             }
         } elseif ($hasTypeAssignment) {
@@ -272,9 +582,7 @@ if ($conn !== null && $canViewAnything) {
                 $stmt->bind_param('i', $memberGrievanceTypeId);
                 $stmt->execute();
                 $res = $stmt->get_result();
-                while ($row = $res->fetch_assoc()) {
-                    $grievances[] = $row;
-                }
+                while ($row = $res->fetch_assoc()) $grievances[] = $row;
                 $stmt->close();
             }
         }
@@ -287,12 +595,57 @@ if ($conn !== null && $canViewAnything) {
 $totalGrievances = count($grievances);
 
 // ---------------------------------------------------------------------------
+// BULK-FETCH ACTION SUMMARIES
+// ---------------------------------------------------------------------------
+$actionsByGrievance = [];
+
+if ($conn !== null && !empty($grievances)) {
+    try {
+        $ids = array_map(function ($g) { return (int) $g['grievance_id']; }, $grievances);
+        $ids = array_values(array_unique(array_filter($ids)));
+
+        if (!empty($ids)) {
+            $placeholders = implode(',', array_fill(0, count($ids), '?'));
+
+            $sql = "SELECT ga.id, ga.grievance_id, ga.action_date, ga.attendee_id,
+                           ga.summary, ga.action_taken, ga.created_by, ga.created_at,
+                           cm.name AS attendee_name,
+                           d.designation_name AS attendee_designation,
+                           u.username AS created_by_username
+                    FROM grievance_actions ga
+                    LEFT JOIN cell_members cm    ON cm.id = ga.attendee_id
+                    LEFT JOIN designations d     ON d.id  = cm.designation_id
+                    LEFT JOIN users u            ON u.id  = ga.created_by
+                    WHERE ga.grievance_id IN ($placeholders)
+                    ORDER BY ga.action_date ASC, ga.id ASC";
+
+            $stmt = $conn->prepare($sql);
+            if ($stmt) {
+                $types = str_repeat('i', count($ids));
+                $stmt->bind_param($types, ...$ids);
+                $stmt->execute();
+                $res = $stmt->get_result();
+                while ($r = $res->fetch_assoc()) {
+                    $gid = (int) $r['grievance_id'];
+                    if (!isset($actionsByGrievance[$gid])) {
+                        $actionsByGrievance[$gid] = [];
+                    }
+                    $actionsByGrievance[$gid][] = $r;
+                }
+                $stmt->close();
+            }
+        }
+    } catch (Throwable $ex) {
+        error_log('[Action Summary Bulk Fetch] ' . $ex->getMessage());
+    }
+}
+
+// ---------------------------------------------------------------------------
 // STATUS BADGE
 // ---------------------------------------------------------------------------
 function statusBadge(string $status): string
 {
     $status = trim($status);
-
     $map = [
         'Pending'     => 'bg-amber-100 text-amber-800 border-amber-200',
         'In Progress' => 'bg-blue-100 text-blue-800 border-blue-200',
@@ -300,9 +653,7 @@ function statusBadge(string $status): string
         'Closed'      => 'bg-slate-200 text-slate-700 border-slate-300',
         'Reopened'    => 'bg-rose-100 text-rose-800 border-rose-200',
     ];
-
     $classes = $map[$status] ?? 'bg-slate-100 text-slate-700 border-slate-200';
-
     return '<span class="inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider border '
         . $classes . '">' . e($status) . '</span>';
 }
@@ -329,30 +680,12 @@ function statusBadge(string $status): string
             brandGold:   '#C5A059'
           },
           keyframes: {
-            fadeInUp: {
-              '0%':   { opacity: '0', transform: 'translateY(12px)' },
-              '100%': { opacity: '1', transform: 'translateY(0)' }
-            },
-            dropdownFade: {
-              '0%':   { opacity: '0', transform: 'translateY(-8px) scale(0.98)' },
-              '100%': { opacity: '1', transform: 'translateY(0) scale(1)' }
-            },
-            flashIn: {
-              '0%':   { opacity: '0', transform: 'translateY(-10px)' },
-              '100%': { opacity: '1', transform: 'translateY(0)' }
-            },
-            flashOut: {
-              '0%':   { opacity: '1', transform: 'translateY(0)', maxHeight: '200px' },
-              '100%': { opacity: '0', transform: 'translateY(-10px)', maxHeight: '0px' }
-            },
-            modalIn: {
-              '0%':   { opacity: '0', transform: 'translateY(20px) scale(0.96)' },
-              '100%': { opacity: '1', transform: 'translateY(0) scale(1)' }
-            },
-            lightboxIn: {
-              '0%':   { opacity: '0' },
-              '100%': { opacity: '1' }
-            }
+            fadeInUp:    { '0%': { opacity: '0', transform: 'translateY(12px)' }, '100%': { opacity: '1', transform: 'translateY(0)' } },
+            dropdownFade:{ '0%': { opacity: '0', transform: 'translateY(-8px) scale(0.98)' }, '100%': { opacity: '1', transform: 'translateY(0) scale(1)' } },
+            flashIn:     { '0%': { opacity: '0', transform: 'translateY(-10px)' }, '100%': { opacity: '1', transform: 'translateY(0)' } },
+            flashOut:    { '0%': { opacity: '1', transform: 'translateY(0)', maxHeight: '200px' }, '100%': { opacity: '0', transform: 'translateY(-10px)', maxHeight: '0px' } },
+            modalIn:     { '0%': { opacity: '0', transform: 'translateY(20px) scale(0.96)' }, '100%': { opacity: '1', transform: 'translateY(0) scale(1)' } },
+            lightboxIn:  { '0%': { opacity: '0' }, '100%': { opacity: '1' } }
           },
           animation: {
             'fade-in-up': 'fadeInUp 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards',
@@ -382,76 +715,43 @@ function statusBadge(string $status): string
 
       <button id="sidebarToggle"
               class="text-white/80 hover:text-white mb-8 p-2 rounded-lg hover:bg-white/10 transition-colors
-                     flex items-center justify-center w-14 mx-auto"
-              aria-label="Toggle sidebar">
+                     flex items-center justify-center w-14 mx-auto" aria-label="Toggle sidebar">
         <i data-lucide="menu" class="w-6 h-6 flex-shrink-0"></i>
       </button>
 
       <nav class="flex flex-col space-y-2 flex-1 w-full px-3">
-
-        <a href="dashboard.php"
-           class="group relative w-full h-12 rounded-xl bg-white/10 hover:bg-white/20
-                  flex items-center text-white transition-all px-3">
+        <a href="dashboard.php" class="group relative w-full h-12 rounded-xl bg-white/10 hover:bg-white/20 flex items-center text-white transition-all px-3">
           <i data-lucide="home" class="w-6 h-6 flex-shrink-0"></i>
-          <span class="sidebar-label ml-4 text-sm font-semibold whitespace-nowrap
-                       opacity-0 w-0 overflow-hidden transition-all duration-200">
-            Dashboard
-          </span>
-          <span class="sidebar-tooltip absolute left-full ml-3 hidden group-hover:block whitespace-nowrap
-                       bg-[#4A154B] text-white text-xs px-3 py-1.5 rounded-lg shadow-lg z-50">
-            Dashboard
-          </span>
+          <span class="sidebar-label ml-4 text-sm font-semibold whitespace-nowrap opacity-0 w-0 overflow-hidden transition-all duration-200">Dashboard</span>
+          <span class="sidebar-tooltip absolute left-full ml-3 hidden group-hover:block whitespace-nowrap bg-[#4A154B] text-white text-xs px-3 py-1.5 rounded-lg shadow-lg z-50">Dashboard</span>
         </a>
 
-        <a href="profile.php"
-           class="group relative w-full h-12 rounded-xl bg-white/10 hover:bg-white/20
-                  flex items-center text-white transition-all px-3">
+        <a href="profile.php" class="group relative w-full h-12 rounded-xl bg-white/10 hover:bg-white/20 flex items-center text-white transition-all px-3">
           <i data-lucide="user" class="w-6 h-6 flex-shrink-0"></i>
-          <span class="sidebar-label ml-4 text-sm font-semibold whitespace-nowrap
-                       opacity-0 w-0 overflow-hidden transition-all duration-200">
-            My Profile
-          </span>
-          <span class="sidebar-tooltip absolute left-full ml-3 hidden group-hover:block whitespace-nowrap
-                       bg-[#4A154B] text-white text-xs px-3 py-1.5 rounded-lg shadow-lg z-50">
-            My Profile
-          </span>
+          <span class="sidebar-label ml-4 text-sm font-semibold whitespace-nowrap opacity-0 w-0 overflow-hidden transition-all duration-200">My Profile</span>
+          <span class="sidebar-tooltip absolute left-full ml-3 hidden group-hover:block whitespace-nowrap bg-[#4A154B] text-white text-xs px-3 py-1.5 rounded-lg shadow-lg z-50">My Profile</span>
         </a>
 
-        <a href="change_password.php"
-           class="group relative w-full h-12 rounded-xl bg-white/10 hover:bg-white/20
-                  flex items-center text-white transition-all px-3">
+        <a href="grievance_reports.php" class="group relative w-full h-12 rounded-xl bg-white/10 hover:bg-white/20 flex items-center text-white transition-all px-3">
+          <i data-lucide="file-bar-chart" class="w-6 h-6 flex-shrink-0"></i>
+          <span class="sidebar-label ml-4 text-sm font-semibold whitespace-nowrap opacity-0 w-0 overflow-hidden transition-all duration-200">Grievance Reports</span>
+          <span class="sidebar-tooltip absolute left-full ml-3 hidden group-hover:block whitespace-nowrap bg-[#4A154B] text-white text-xs px-3 py-1.5 rounded-lg shadow-lg z-50">Grievance Reports</span>
+        </a>
+
+        <a href="change_password.php" class="group relative w-full h-12 rounded-xl bg-white/10 hover:bg-white/20 flex items-center text-white transition-all px-3">
           <i data-lucide="key" class="w-6 h-6 flex-shrink-0"></i>
-          <span class="sidebar-label ml-4 text-sm font-semibold whitespace-nowrap
-                       opacity-0 w-0 overflow-hidden transition-all duration-200">
-            Change Password
-          </span>
-          <span class="sidebar-tooltip absolute left-full ml-3 hidden group-hover:block whitespace-nowrap
-                       bg-[#4A154B] text-white text-xs px-3 py-1.5 rounded-lg shadow-lg z-50">
-            Change Password
-          </span>
+          <span class="sidebar-label ml-4 text-sm font-semibold whitespace-nowrap opacity-0 w-0 overflow-hidden transition-all duration-200">Change Password</span>
+          <span class="sidebar-tooltip absolute left-full ml-3 hidden group-hover:block whitespace-nowrap bg-[#4A154B] text-white text-xs px-3 py-1.5 rounded-lg shadow-lg z-50">Change Password</span>
         </a>
-
       </nav>
 
-      <a href="#"
-         data-logout-trigger="1"
-         id="sidebarLogoutBtn"
-         class="group relative w-full h-12 rounded-xl bg-white/10 hover:bg-red-500/40
-                flex items-center text-white transition-all
-                mx-3 px-3"
-         style="width: calc(100% - 1.5rem);"
-         title="Logout">
+      <a href="#" data-logout-trigger="1" id="sidebarLogoutBtn"
+         class="group relative w-full h-12 rounded-xl bg-white/10 hover:bg-red-500/40 flex items-center text-white transition-all mx-3 px-3"
+         style="width: calc(100% - 1.5rem);" title="Logout">
         <i data-lucide="log-out" class="w-6 h-6 flex-shrink-0"></i>
-        <span class="sidebar-label ml-4 text-sm font-semibold whitespace-nowrap
-                     opacity-0 w-0 overflow-hidden transition-all duration-200">
-          Logout
-        </span>
-        <span class="sidebar-tooltip absolute left-full ml-3 hidden group-hover:block whitespace-nowrap
-                     bg-red-600 text-white text-xs px-3 py-1.5 rounded-lg shadow-lg z-50">
-          Logout
-        </span>
+        <span class="sidebar-label ml-4 text-sm font-semibold whitespace-nowrap opacity-0 w-0 overflow-hidden transition-all duration-200">Logout</span>
+        <span class="sidebar-tooltip absolute left-full ml-3 hidden group-hover:block whitespace-nowrap bg-red-600 text-white text-xs px-3 py-1.5 rounded-lg shadow-lg z-50">Logout</span>
       </a>
-
     </aside>
 
     <!-- MAIN CONTENT -->
@@ -460,57 +760,39 @@ function statusBadge(string $status): string
       <!-- TOP HEADER -->
       <header class="bg-white border-b border-slate-200 shadow-sm sticky top-0 z-30">
         <div class="flex items-center justify-between px-6 py-4">
-
           <div class="flex items-center space-x-4">
             <a href="dashboard.php" class="flex items-center group">
-              <img src="../public/rcss-logo.png" alt="RCSS Logo"
-                   class="h-10 md:h-11 w-auto transition-transform group-hover:scale-105" />
+              <img src="../public/rcss-logo.png" alt="RCSS Logo" class="h-10 md:h-11 w-auto transition-transform group-hover:scale-105" />
             </a>
-
             <div class="hidden sm:flex items-center h-10">
               <div class="w-px h-full bg-gradient-to-b from-transparent via-slate-300 to-transparent"></div>
             </div>
-
-            <img src="../public/orel-grievance.png" alt="Oréll Grievance"
-                 class="hidden sm:block h-8 md:h-9 w-auto object-contain" />
+            <img src="../public/orel-grievance.png" alt="Oréll Grievance" class="hidden sm:block h-8 md:h-9 w-auto object-contain" />
           </div>
 
           <div class="relative" id="management-dropdown-container">
-            <button id="management-dropdown-btn"
-                    type="button"
-                    aria-haspopup="true"
-                    aria-expanded="false"
+            <button id="management-dropdown-btn" type="button" aria-haspopup="true" aria-expanded="false"
                     class="flex items-center space-x-3 px-3 py-2 rounded-lg hover:bg-slate-100 transition-colors">
-
               <?php if ($hasProfilePicture): ?>
                 <img src="<?= e($profilePictureUrl) ?>" alt="<?= e($displayName) ?>"
                      class="w-10 h-10 rounded-full object-cover border-2 border-[#C5A059] shadow-md ring-2 ring-purple-100" />
               <?php else: ?>
-                <div class="w-10 h-10 rounded-full bg-gradient-to-br from-[#4A154B] to-[#8B1E7E]
-                            flex items-center justify-center text-white shadow-md ring-2 ring-purple-100">
+                <div class="w-10 h-10 rounded-full bg-gradient-to-br from-[#4A154B] to-[#8B1E7E] flex items-center justify-center text-white shadow-md ring-2 ring-purple-100">
                   <i data-lucide="user" class="w-5 h-5"></i>
                 </div>
               <?php endif; ?>
-
-              <span class="hidden sm:block text-sm font-semibold text-slate-700">
-                <?= e($displayName) ?>
-              </span>
-              <i data-lucide="chevron-down" id="management-chevron"
-                 class="w-4 h-4 text-slate-500 transition-transform duration-300"></i>
+              <span class="hidden sm:block text-sm font-semibold text-slate-700"><?= e($displayName) ?></span>
+              <i data-lucide="chevron-down" id="management-chevron" class="w-4 h-4 text-slate-500 transition-transform duration-300"></i>
             </button>
 
             <div id="management-dropdown-menu"
-                 class="hidden absolute right-0 mt-2 w-64 bg-white rounded-xl shadow-2xl
-                        border border-slate-200 py-2 z-50 overflow-hidden">
-
+                 class="hidden absolute right-0 mt-2 w-64 bg-white rounded-xl shadow-2xl border border-slate-200 py-2 z-50 overflow-hidden">
               <div class="px-4 py-3 border-b border-slate-100 bg-gradient-to-r from-slate-50 to-white">
                 <div class="flex items-center space-x-3">
                   <?php if ($hasProfilePicture): ?>
-                    <img src="<?= e($profilePictureUrl) ?>" alt="<?= e($displayName) ?>"
-                         class="w-12 h-12 rounded-full object-cover border-2 border-[#C5A059]" />
+                    <img src="<?= e($profilePictureUrl) ?>" alt="<?= e($displayName) ?>" class="w-12 h-12 rounded-full object-cover border-2 border-[#C5A059]" />
                   <?php else: ?>
-                    <div class="w-12 h-12 rounded-full bg-gradient-to-br from-[#4A154B] to-[#8B1E7E]
-                                flex items-center justify-center text-white">
+                    <div class="w-12 h-12 rounded-full bg-gradient-to-br from-[#4A154B] to-[#8B1E7E] flex items-center justify-center text-white">
                       <i data-lucide="user" class="w-6 h-6 text-white"></i>
                     </div>
                   <?php endif; ?>
@@ -521,67 +803,42 @@ function statusBadge(string $status): string
                 </div>
               </div>
 
-              <a href="dashboard.php"
-                 class="flex items-center px-4 py-2.5 text-sm text-slate-700
-                        hover:bg-gradient-to-r hover:from-pink-50 hover:to-purple-50
-                        hover:text-[#8B1E7E] transition-all duration-200 group/item">
-                <i data-lucide="layout-dashboard"
-                   class="w-4 h-4 mr-3 text-[#8B1E7E] group-hover/item:scale-110 transition-transform"></i>
+              <a href="dashboard.php" class="flex items-center px-4 py-2.5 text-sm text-slate-700 hover:bg-gradient-to-r hover:from-pink-50 hover:to-purple-50 hover:text-[#8B1E7E] transition-all duration-200 group/item">
+                <i data-lucide="layout-dashboard" class="w-4 h-4 mr-3 text-[#8B1E7E] group-hover/item:scale-110 transition-transform"></i>
                 <span class="font-medium">Dashboard</span>
-                <i data-lucide="arrow-right"
-                   class="w-4 h-4 ml-auto opacity-0 group-hover/item:opacity-100 text-[#8B1E7E] transition-opacity"></i>
+                <i data-lucide="arrow-right" class="w-4 h-4 ml-auto opacity-0 group-hover/item:opacity-100 text-[#8B1E7E] transition-opacity"></i>
               </a>
-
-              <a href="profile.php"
-                 class="flex items-center px-4 py-2.5 text-sm text-slate-700
-                        hover:bg-gradient-to-r hover:from-pink-50 hover:to-purple-50
-                        hover:text-[#8B1E7E] transition-all duration-200 group/item">
-                <i data-lucide="user"
-                   class="w-4 h-4 mr-3 text-[#8B1E7E] group-hover/item:scale-110 transition-transform"></i>
+              <a href="profile.php" class="flex items-center px-4 py-2.5 text-sm text-slate-700 hover:bg-gradient-to-r hover:from-pink-50 hover:to-purple-50 hover:text-[#8B1E7E] transition-all duration-200 group/item">
+                <i data-lucide="user" class="w-4 h-4 mr-3 text-[#8B1E7E] group-hover/item:scale-110 transition-transform"></i>
                 <span class="font-medium">My Profile</span>
-                <i data-lucide="arrow-right"
-                   class="w-4 h-4 ml-auto opacity-0 group-hover/item:opacity-100 text-[#8B1E7E] transition-opacity"></i>
+                <i data-lucide="arrow-right" class="w-4 h-4 ml-auto opacity-0 group-hover/item:opacity-100 text-[#8B1E7E] transition-opacity"></i>
               </a>
-
-              <a href="change_password.php"
-                 class="flex items-center px-4 py-2.5 text-sm text-slate-700
-                        hover:bg-gradient-to-r hover:from-pink-50 hover:to-purple-50
-                        hover:text-[#8B1E7E] transition-all duration-200 group/item">
-                <i data-lucide="key"
-                   class="w-4 h-4 mr-3 text-[#8B1E7E] group-hover/item:scale-110 transition-transform"></i>
+              <a href="change_password.php" class="flex items-center px-4 py-2.5 text-sm text-slate-700 hover:bg-gradient-to-r hover:from-pink-50 hover:to-purple-50 hover:text-[#8B1E7E] transition-all duration-200 group/item">
+                <i data-lucide="key" class="w-4 h-4 mr-3 text-[#8B1E7E] group-hover/item:scale-110 transition-transform"></i>
                 <span class="font-medium">Change Password</span>
-                <i data-lucide="arrow-right"
-                   class="w-4 h-4 ml-auto opacity-0 group-hover/item:opacity-100 text-[#8B1E7E] transition-opacity"></i>
+                <i data-lucide="arrow-right" class="w-4 h-4 ml-auto opacity-0 group-hover/item:opacity-100 text-[#8B1E7E] transition-opacity"></i>
               </a>
-
               <div class="border-t border-slate-100 mt-2 pt-2">
-                <a href="#" data-logout-trigger="1" id="dropdownLogoutBtn"
-                   class="flex items-center px-4 py-2.5 text-sm text-red-600
-                          hover:bg-red-50 transition-all duration-200 group/item">
+                <a href="#" data-logout-trigger="1" id="dropdownLogoutBtn" class="flex items-center px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 transition-all duration-200 group/item">
                   <i data-lucide="log-out" class="w-4 h-4 mr-3 group-hover/item:scale-110 transition-transform"></i>
                   <span class="font-medium">Logout</span>
                 </a>
               </div>
             </div>
           </div>
-
         </div>
       </header>
 
       <!-- PAGE CONTENT -->
       <main class="flex-1 px-6 py-8">
 
-        <!-- Breadcrumb + Add Button -->
         <div class="max-w-7xl mx-auto mb-6 animate-fade-in-up">
           <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
             <div>
-              <h1 class="text-2xl md:text-3xl font-bold text-slate-800 mb-2 tracking-tight">
-                Grievance Details
-              </h1>
+              <h1 class="text-2xl md:text-3xl font-bold text-slate-800 mb-2 tracking-tight">Grievance Details</h1>
               <nav class="flex items-center space-x-2 text-sm text-slate-500">
                 <a href="dashboard.php" class="flex items-center hover:text-[#8B1E7E] transition-colors">
-                  <i data-lucide="layout-dashboard" class="w-4 h-4 mr-1"></i>
-                  Dashboard
+                  <i data-lucide="layout-dashboard" class="w-4 h-4 mr-1"></i> Dashboard
                 </a>
                 <span class="text-slate-300">/</span>
                 <a href="grievances.php" class="hover:text-[#8B1E7E] transition-colors">Grievance</a>
@@ -590,17 +847,10 @@ function statusBadge(string $status): string
               </nav>
             </div>
 
-            <a href="create_grievance.php"
-               title="Add Grievance"
-               class="inline-flex items-center justify-center w-11 h-11 rounded-xl bg-[#4A154B] hover:bg-[#5A1B5C]
-                      text-white shadow-lg shadow-purple-500/30 hover:shadow-purple-500/50
-                      transition-all duration-300 hover:-translate-y-0.5 active:scale-95">
-              <i data-lucide="plus" class="w-5 h-5"></i>
-            </a>
+            <!-- Plus button removed as requested -->
           </div>
         </div>
 
-        <!-- Warning: no cell_members row -->
         <?php if (!$hasCellRow): ?>
           <div class="max-w-7xl mx-auto mb-6 rounded-xl border-2 border-amber-200 bg-amber-50 px-4 py-3
                       flex items-start space-x-2 animate-fade-in-up" style="animation-delay: 40ms;">
@@ -612,7 +862,6 @@ function statusBadge(string $status): string
           </div>
         <?php endif; ?>
 
-        <!-- Flash Messages -->
         <?php if ($flashSuccess !== ''): ?>
           <div id="flashSuccessBox"
                class="max-w-7xl mx-auto mb-6 rounded-xl border-2 border-emerald-200 bg-emerald-50 px-4 py-3
@@ -635,7 +884,6 @@ function statusBadge(string $status): string
         <div class="max-w-7xl mx-auto mb-5 animate-fade-in-up" style="animation-delay: 60ms;">
           <div class="bg-white rounded-xl shadow-sm border border-slate-200/70 px-5 py-4">
             <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-
               <div class="flex items-center space-x-3">
                 <span class="text-sm text-slate-600">Show</span>
                 <select id="entriesPerPage"
@@ -652,15 +900,11 @@ function statusBadge(string $status): string
 
               <div class="relative w-full sm:w-80">
                 <i data-lucide="search" class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400"></i>
-                <input type="text"
-                       id="searchInput"
-                       placeholder="Search.."
-                       autocomplete="off"
+                <input type="text" id="searchInput" placeholder="Search.." autocomplete="off"
                        class="w-full pl-10 pr-4 py-2 border-2 border-slate-200 rounded-lg text-sm
                               focus:outline-none focus:border-[#4A154B] focus:ring-4 focus:ring-[#4A154B]/10
                               hover:border-[#4A154B]/40 transition-all bg-white" />
               </div>
-
             </div>
           </div>
         </div>
@@ -668,7 +912,6 @@ function statusBadge(string $status): string
         <!-- DATA TABLE -->
         <div class="max-w-7xl mx-auto animate-fade-in-up" style="animation-delay: 100ms;">
           <div class="bg-white rounded-2xl shadow-lg border border-slate-200/70 overflow-hidden">
-
             <div class="overflow-x-auto">
               <table class="w-full" id="grievancesTable">
                 <thead>
@@ -681,14 +924,13 @@ function statusBadge(string $status): string
                     <th class="px-4 py-4 text-left text-xs font-bold uppercase tracking-wider">Subject</th>
                     <th class="px-4 py-4 text-left text-xs font-bold uppercase tracking-wider">Status</th>
                     <th class="px-4 py-4 text-center text-xs font-bold uppercase tracking-wider">Actions</th>
-                    <th class="px-4 py-4 text-center text-xs font-bold uppercase tracking-wider">Escalate</th>
                   </tr>
                 </thead>
                 <tbody class="divide-y divide-slate-100" id="grievancesTableBody">
 
                   <?php if (empty($grievances)): ?>
                     <tr>
-                      <td colspan="9" class="px-6 py-16 text-center text-slate-500">
+                      <td colspan="8" class="px-6 py-16 text-center text-slate-500">
                         <div class="flex flex-col items-center justify-center">
                           <div class="w-16 h-16 bg-purple-50 rounded-full flex items-center justify-center mb-4">
                             <i data-lucide="inbox" class="w-8 h-8 text-[#8B1E7E]"></i>
@@ -729,15 +971,12 @@ function statusBadge(string $status): string
                         $gAttachment  = (string) ($row['attachment_path'] ?? '');
                         $gReply       = (string) ($row['reply_details'] ?? '');
                         $gReplyAttach = (string) ($row['reply_attachment_path'] ?? '');
+                        $gReopen      = (string) ($row['reopen_reason'] ?? '');
 
                         $isPending  = in_array($gStatus, ['Pending', 'In Progress', 'Reopened'], true);
-                        $isDisposed = in_array($gStatus, ['Disposed', 'Closed'], true);
-                        $canReopen  = $isDisposed;
 
-                        // Image extensions we want to preview inline
                         $imageExts = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp'];
 
-                        // Original attachment
                         $attachmentUrl    = '';
                         $attachmentIsImg  = false;
                         $attachmentExt    = '';
@@ -750,7 +989,6 @@ function statusBadge(string $status): string
                             }
                         }
 
-                        // Reply attachment
                         $replyAttachmentUrl   = '';
                         $replyAttachmentIsImg = false;
                         $replyAttachmentExt   = '';
@@ -762,36 +1000,35 @@ function statusBadge(string $status): string
                                 $replyAttachmentIsImg = in_array($replyAttachmentExt, $imageExts, true);
                             }
                         }
+
+                        $actionsForThis = $actionsByGrievance[$gId] ?? [];
+                        $actionsJson = [];
+                        foreach ($actionsForThis as $act) {
+                            $actionsJson[] = [
+                                'date'              => !empty($act['action_date']) ? date('d M Y', strtotime((string) $act['action_date'])) : '',
+                                'attendee_name'     => (string) ($act['attendee_name'] ?? ''),
+                                'attendee_desig'    => (string) ($act['attendee_designation'] ?? ''),
+                                'summary'           => (string) ($act['summary'] ?? ''),
+                                'action_taken'      => (string) ($act['action_taken'] ?? ''),
+                                'created_by'        => (string) ($act['created_by_username'] ?? ''),
+                            ];
+                        }
                       ?>
                       <tr class="hover:bg-slate-50/80 transition-colors align-top">
 
-                        <td class="px-4 py-5 whitespace-nowrap text-sm text-slate-800">
-                          <?= $index + 1 ?>
-                        </td>
+                        <td class="px-4 py-5 whitespace-nowrap text-sm text-slate-800"><?= $index + 1 ?></td>
 
-                        <td class="px-4 py-5 text-sm text-[#4A154B] font-medium break-words">
-                          <?= e($gNumber) ?>
-                        </td>
+                        <td class="px-4 py-5 text-sm text-[#4A154B] font-medium break-words"><?= e($gNumber) ?></td>
 
-                        <td class="px-4 py-5 text-sm text-slate-700 break-words max-w-[220px]">
-                          <?= e($gTypeName) ?>
-                        </td>
+                        <td class="px-4 py-5 text-sm text-slate-700 break-words max-w-[220px]"><?= e($gTypeName) ?></td>
 
-                        <td class="px-4 py-5 text-sm text-slate-700 break-words max-w-[180px]">
-                          <?= e($gName) ?>
-                        </td>
+                        <td class="px-4 py-5 text-sm text-slate-700 break-words max-w-[180px]"><?= e($gName) ?></td>
 
-                        <td class="px-4 py-5 whitespace-nowrap text-sm text-slate-700">
-                          <?= e($gCreated) ?>
-                        </td>
+                        <td class="px-4 py-5 whitespace-nowrap text-sm text-slate-700"><?= e($gCreated) ?></td>
 
-                        <td class="px-4 py-5 text-sm text-slate-700 break-words max-w-[160px]">
-                          <?= e($gSubject) ?>
-                        </td>
+                        <td class="px-4 py-5 text-sm text-slate-700 break-words max-w-[160px]"><?= e($gSubject) ?></td>
 
-                        <td class="px-4 py-5 whitespace-nowrap">
-                          <?= statusBadge($gStatus) ?>
-                        </td>
+                        <td class="px-4 py-5 whitespace-nowrap"><?= statusBadge($gStatus) ?></td>
 
                         <td class="px-4 py-5">
                           <div class="flex items-center justify-center gap-2 flex-wrap">
@@ -833,43 +1070,32 @@ function statusBadge(string $status): string
                           </div>
                         </td>
 
-                        <td class="px-4 py-5 text-center">
-                          <?php if ($canReopen): ?>
-                            <a href="grievance_reopen.php?id=<?= $gId ?>"
-                               title="Click to Reopen"
-                               class="inline-flex items-center justify-center w-9 h-9 rounded-full bg-purple-50 hover:bg-[#4A154B]
-                                      text-[#4A154B] hover:text-white transition-all duration-200 hover:scale-110">
-                              <i data-lucide="folder-symlink" class="w-4 h-4"></i>
-                            </a>
-                          <?php else: ?>
-                            <span class="text-xs text-slate-400 italic">—</span>
-                          <?php endif; ?>
-                        </td>
-
                       </tr>
 
                       <!-- Hidden JSON per row for the View modal -->
                       <script type="application/json" id="grievance-data-<?= $gId ?>">
                         <?= json_encode([
-                            'id'                     => $gId,
-                            'number'                 => $gNumber,
-                            'type'                   => $gTypeName,
-                            'subject'                => $gSubject,
-                            'description'            => $gDescription,
-                            'status'                 => $gStatus,
-                            'complainant'            => $gName,
-                            'email'                  => $gEmail,
-                            'phone'                  => $gPhone,
-                            'role'                   => $gRole,
-                            'created_at'             => $gCreatedFull,
-                            'updated_at'             => !empty($gUpdatedRaw) ? date('d M Y, h:i A', strtotime($gUpdatedRaw)) : '',
-                            'attachment_url'         => $attachmentUrl,
-                            'attachment_is_image'    => $attachmentIsImg,
-                            'attachment_ext'         => $attachmentExt,
-                            'reply_details'          => $gReply,
-                            'reply_attachment_url'   => $replyAttachmentUrl,
+                            'id'                        => $gId,
+                            'number'                    => $gNumber,
+                            'type'                      => $gTypeName,
+                            'subject'                   => $gSubject,
+                            'description'               => $gDescription,
+                            'status'                    => $gStatus,
+                            'complainant'               => $gName,
+                            'email'                     => $gEmail,
+                            'phone'                     => $gPhone,
+                            'role'                      => $gRole,
+                            'created_at'                => $gCreatedFull,
+                            'updated_at'                => !empty($gUpdatedRaw) ? date('d M Y, h:i A', strtotime($gUpdatedRaw)) : '',
+                            'attachment_url'            => $attachmentUrl,
+                            'attachment_is_image'       => $attachmentIsImg,
+                            'attachment_ext'            => $attachmentExt,
+                            'reply_details'             => $gReply,
+                            'reply_attachment_url'      => $replyAttachmentUrl,
                             'reply_attachment_is_image' => $replyAttachmentIsImg,
-                            'reply_attachment_ext'   => $replyAttachmentExt,
+                            'reply_attachment_ext'      => $replyAttachmentExt,
+                            'reopen_reason'             => $gReopen,
+                            'actions'                   => $actionsJson,
                         ], JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) ?>
                       </script>
 
@@ -883,7 +1109,6 @@ function statusBadge(string $status): string
 
             <div class="px-6 py-4 bg-slate-50/50 border-t border-slate-200
                         flex flex-col sm:flex-row items-center justify-between gap-4">
-
               <p class="text-sm text-slate-600" id="tableInfo">
                 Showing
                 <span class="font-semibold text-slate-900" id="infoStart"><?= $totalGrievances > 0 ? 1 : 0 ?></span>
@@ -898,24 +1123,17 @@ function statusBadge(string $status): string
                 <button type="button" id="prevPageBtn"
                         class="px-4 py-2 rounded-lg text-sm font-medium text-slate-500
                                hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-                        disabled>
-                  Previous
-                </button>
+                        disabled>Previous</button>
 
                 <span id="currentPageBadge"
                       class="inline-flex items-center justify-center w-9 h-9 rounded-lg
-                             bg-[#4A154B] text-white text-sm font-bold shadow-md">
-                  1
-                </span>
+                             bg-[#4A154B] text-white text-sm font-bold shadow-md">1</span>
 
                 <button type="button" id="nextPageBtn"
                         class="px-4 py-2 rounded-lg text-sm font-medium text-slate-500
                                hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-                        disabled>
-                  Next
-                </button>
+                        disabled>Next</button>
               </div>
-
             </div>
 
           </div>
@@ -929,14 +1147,11 @@ function statusBadge(string $status): string
           <div class="max-w-7xl mx-auto text-center">
             <p class="text-xs text-slate-700">
               &copy; <?= date('Y') ?>
-              <span class="font-bold text-[#006837]">Rajagiri College of Social Sciences</span>.
-              All rights reserved.
+              <span class="font-bold text-[#006837]">Rajagiri College of Social Sciences</span>. All rights reserved.
             </p>
             <p class="text-xs text-slate-700 mt-1">
               Powered by
-              <span class="font-bold bg-gradient-to-r from-[#4A154B] to-[#E5097F] bg-clip-text text-transparent ml-1">
-                Oréll Grievance
-              </span>
+              <span class="font-bold bg-gradient-to-r from-[#4A154B] to-[#E5097F] bg-clip-text text-transparent ml-1">Oréll Grievance</span>
             </p>
           </div>
         </div>
@@ -946,13 +1161,12 @@ function statusBadge(string $status): string
   </div>
 
   <!-- ============================================================ -->
-  <!-- REPLY GRIEVANCE MODAL                                        -->
+  <!-- REPLY MODAL -->
   <!-- ============================================================ -->
   <div id="replyModal" class="hidden fixed inset-0 z-[80] flex items-center justify-center p-4">
     <div class="absolute inset-0 bg-black/50 backdrop-blur-sm" data-modal-close="reply"></div>
 
     <div class="relative w-full max-w-lg bg-white rounded-2xl shadow-2xl overflow-hidden animate-modal-in">
-
       <div class="flex items-start justify-between px-6 pt-6 pb-3">
         <div>
           <h3 class="text-xl md:text-2xl font-bold text-slate-800">Reply Grievance</h3>
@@ -960,27 +1174,19 @@ function statusBadge(string $status): string
             Ref: <span class="font-semibold text-[#8B1E7E]" id="replyGrievanceNumber">—</span>
           </p>
         </div>
-        <button type="button"
-                data-modal-close="reply"
-                class="text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg p-1.5 transition-colors"
-                aria-label="Close">
+        <button type="button" data-modal-close="reply"
+                class="text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg p-1.5 transition-colors" aria-label="Close">
           <i data-lucide="x" class="w-5 h-5"></i>
         </button>
       </div>
 
-      <form id="replyForm" method="post" action="grievance_reply_submit.php" enctype="multipart/form-data" class="px-6 pb-6">
-
+      <form id="replyForm" method="post" action="grievances.php" enctype="multipart/form-data" class="px-6 pb-6">
+        <input type="hidden" name="form_action" value="reply_grievance" />
         <input type="hidden" name="grievance_id" id="replyGrievanceId" value="" />
 
         <div class="mb-4">
-          <label for="replyText" class="block text-sm font-semibold text-slate-700 mb-2">
-            Reply
-          </label>
-          <textarea id="replyText"
-                    name="reply"
-                    rows="4"
-                    maxlength="120"
-                    required
+          <label for="replyText" class="block text-sm font-semibold text-slate-700 mb-2">Reply</label>
+          <textarea id="replyText" name="reply" rows="4" maxlength="120" required
                     class="w-full px-4 py-3 border-2 border-slate-200 rounded-xl text-sm text-slate-800
                            focus:outline-none focus:border-[#4A154B] focus:ring-4 focus:ring-[#4A154B]/10
                            hover:border-[#4A154B]/40 transition-all resize-none bg-white"
@@ -991,30 +1197,17 @@ function statusBadge(string $status): string
         </div>
 
         <div class="mb-5">
-          <input type="file"
-                 id="replyFile"
-                 name="attachment"
-                 accept=".pdf,.jpg,.jpeg,.png,.doc,.docx"
-                 class="hidden" />
-
-          <div class="flex items-stretch border-2 border-slate-200 rounded-xl overflow-hidden
-                      hover:border-[#4A154B]/40 transition-colors">
-
-            <label for="replyFile"
-                   class="inline-flex items-center justify-center px-5 py-2.5
+          <input type="file" id="replyFile" name="attachment" accept=".pdf,.jpg,.jpeg,.png,.doc,.docx" class="hidden" />
+          <div class="flex items-stretch border-2 border-slate-200 rounded-xl overflow-hidden hover:border-[#4A154B]/40 transition-colors">
+            <label for="replyFile" class="inline-flex items-center justify-center px-5 py-2.5
                           bg-slate-100 hover:bg-slate-200 cursor-pointer
                           text-sm font-semibold text-slate-700
                           border-r-2 border-slate-200 transition-colors flex-shrink-0">
-              <i data-lucide="upload" class="w-4 h-4 mr-2"></i>
-              Choose files
+              <i data-lucide="upload" class="w-4 h-4 mr-2"></i> Choose files
             </label>
-
-            <span id="replyFileName"
-                  class="flex items-center px-4 py-2.5 text-sm text-slate-500
-                         truncate flex-1 bg-white">
+            <span id="replyFileName" class="flex items-center px-4 py-2.5 text-sm text-slate-500 truncate flex-1 bg-white">
               No file chosen
             </span>
-
           </div>
           <p class="text-xs text-slate-500 mt-1.5">(Max 5 Mb)</p>
         </div>
@@ -1029,13 +1222,12 @@ function statusBadge(string $status): string
             <span>Submit</span>
           </button>
         </div>
-
       </form>
     </div>
   </div>
 
   <!-- ============================================================ -->
-  <!-- VIEW GRIEVANCE MODAL                                         -->
+  <!-- VIEW MODAL (now includes Reopen Reason) -->
   <!-- ============================================================ -->
   <div id="viewModal" class="hidden fixed inset-0 z-[80] flex items-center justify-center p-4">
     <div class="absolute inset-0 bg-black/50 backdrop-blur-sm" data-modal-close="view"></div>
@@ -1056,17 +1248,14 @@ function statusBadge(string $status): string
             </p>
           </div>
         </div>
-        <button type="button"
-                data-modal-close="view"
-                class="text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg p-1.5 transition-colors flex-shrink-0"
-                aria-label="Close">
+        <button type="button" data-modal-close="view"
+                class="text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg p-1.5 transition-colors flex-shrink-0" aria-label="Close">
           <i data-lucide="x" class="w-5 h-5"></i>
         </button>
       </div>
 
       <div class="px-6 py-5 overflow-y-auto flex-1">
 
-        <!-- Summary strip -->
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-5">
           <div class="rounded-xl border border-slate-200 bg-slate-50/60 p-4">
             <p class="text-[11px] uppercase tracking-wider font-bold text-slate-500 mb-1">Grievance Type</p>
@@ -1078,11 +1267,9 @@ function statusBadge(string $status): string
           </div>
         </div>
 
-        <!-- Complainant -->
         <div class="mb-5">
           <h4 class="text-sm font-bold text-slate-700 uppercase tracking-wider mb-3 flex items-center">
-            <i data-lucide="user-circle" class="w-4 h-4 mr-2 text-[#8B1E7E]"></i>
-            Complainant
+            <i data-lucide="user-circle" class="w-4 h-4 mr-2 text-[#8B1E7E]"></i> Complainant
           </h4>
           <div class="rounded-xl border border-slate-200 bg-white p-4">
             <div class="flex items-start space-x-3">
@@ -1105,11 +1292,9 @@ function statusBadge(string $status): string
           </div>
         </div>
 
-        <!-- Subject + Description -->
         <div class="mb-5">
           <h4 class="text-sm font-bold text-slate-700 uppercase tracking-wider mb-3 flex items-center">
-            <i data-lucide="align-left" class="w-4 h-4 mr-2 text-[#8B1E7E]"></i>
-            Grievance Details
+            <i data-lucide="align-left" class="w-4 h-4 mr-2 text-[#8B1E7E]"></i> Grievance Details
           </h4>
           <div class="rounded-xl border border-slate-200 bg-white p-4 space-y-3">
             <div>
@@ -1118,17 +1303,35 @@ function statusBadge(string $status): string
             </div>
             <div class="pt-3 border-t border-slate-100">
               <p class="text-[11px] uppercase tracking-wider font-bold text-slate-500 mb-1">Description</p>
-              <p class="text-sm text-slate-700 leading-relaxed whitespace-pre-wrap break-words"
-                 id="viewGrievanceDescription">—</p>
+              <p class="text-sm text-slate-700 leading-relaxed whitespace-pre-wrap break-words" id="viewGrievanceDescription">—</p>
             </div>
           </div>
         </div>
 
-        <!-- Reply section -->
+        <!-- Reopen Reason (only shows when present) -->
+        <div class="mb-5 hidden" id="viewReopenSection">
+          <h4 class="text-sm font-bold text-slate-700 uppercase tracking-wider mb-3 flex items-center">
+            <i data-lucide="rotate-ccw" class="w-4 h-4 mr-2 text-rose-500"></i> Reopen Reason
+          </h4>
+          <div class="rounded-xl border-2 border-rose-200 bg-rose-50 p-4">
+            <div class="flex items-start space-x-3">
+              <div class="w-9 h-9 rounded-full bg-gradient-to-br from-rose-500 to-pink-500
+                          flex items-center justify-center text-white flex-shrink-0 shadow-md">
+                <i data-lucide="rotate-ccw" class="w-4 h-4"></i>
+              </div>
+              <div class="min-w-0 flex-1">
+                <p class="text-[11px] uppercase tracking-wider font-bold text-rose-700 mb-1.5">
+                  Reason given by complainant for reopening
+                </p>
+                <p class="text-sm text-rose-900 leading-relaxed whitespace-pre-wrap break-words" id="viewReopenReason">—</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <div class="mb-5 hidden" id="viewReplySection">
           <h4 class="text-sm font-bold text-slate-700 uppercase tracking-wider mb-3 flex items-center">
-            <i data-lucide="message-square-reply" class="w-4 h-4 mr-2 text-[#8B1E7E]"></i>
-            Reply
+            <i data-lucide="message-square-reply" class="w-4 h-4 mr-2 text-[#8B1E7E]"></i> Reply
           </h4>
           <div class="rounded-xl border-2 border-purple-200 bg-gradient-to-br from-purple-50 to-pink-50/40 p-4">
             <div class="flex items-start space-x-3">
@@ -1137,21 +1340,23 @@ function statusBadge(string $status): string
                 <i data-lucide="message-square-reply" class="w-4 h-4"></i>
               </div>
               <div class="min-w-0 flex-1">
-                <p class="text-[11px] uppercase tracking-wider font-bold text-[#8B1E7E] mb-1.5">
-                  Reply from Grievance Cell
-                </p>
-                <p class="text-sm text-slate-800 leading-relaxed whitespace-pre-wrap break-words"
-                   id="viewGrievanceReply">—</p>
+                <p class="text-[11px] uppercase tracking-wider font-bold text-[#8B1E7E] mb-1.5">Reply from Grievance Cell</p>
+                <p class="text-sm text-slate-800 leading-relaxed whitespace-pre-wrap break-words" id="viewGrievanceReply">—</p>
               </div>
             </div>
           </div>
         </div>
 
-        <!-- Original Attachment — View + Download buttons -->
+        <div class="mb-5 hidden" id="viewActionSection">
+          <h4 class="text-sm font-bold text-slate-700 uppercase tracking-wider mb-3 flex items-center">
+            <i data-lucide="list-checks" class="w-4 h-4 mr-2 text-[#8B1E7E]"></i> Action Summary
+          </h4>
+          <div id="viewActionList" class="space-y-3"></div>
+        </div>
+
         <div class="mb-5 hidden" id="viewAttachmentSection">
           <h4 class="text-sm font-bold text-slate-700 uppercase tracking-wider mb-3 flex items-center">
-            <i data-lucide="paperclip" class="w-4 h-4 mr-2 text-[#8B1E7E]"></i>
-            Original Attachment
+            <i data-lucide="paperclip" class="w-4 h-4 mr-2 text-[#8B1E7E]"></i> Original Attachment
           </h4>
           <div class="rounded-xl border border-slate-200 bg-white p-4">
             <div class="flex items-center justify-between gap-3 flex-wrap">
@@ -1164,38 +1369,27 @@ function statusBadge(string $status): string
                   <p class="text-[11px] text-slate-500" id="viewAttachmentMeta">—</p>
                 </div>
               </div>
-
               <div class="flex items-center gap-2 flex-shrink-0">
-                <button type="button"
-                        id="viewAttachmentViewBtn"
+                <button type="button" id="viewAttachmentViewBtn"
                         class="inline-flex items-center px-3 py-2 rounded-lg
                                bg-purple-50 hover:bg-[#4A154B] text-[#4A154B] hover:text-white
-                               text-xs font-bold transition-all duration-200
-                               hover:-translate-y-0.5 active:scale-95">
-                  <i data-lucide="eye" class="w-3.5 h-3.5 mr-1.5"></i>
-                  View
+                               text-xs font-bold transition-all duration-200 hover:-translate-y-0.5 active:scale-95">
+                  <i data-lucide="eye" class="w-3.5 h-3.5 mr-1.5"></i> View
                 </button>
-
-                <a id="viewAttachmentDownloadBtn"
-                   href="#"
-                   download
+                <a id="viewAttachmentDownloadBtn" href="#" download
                    class="inline-flex items-center px-3 py-2 rounded-lg
                           bg-emerald-50 hover:bg-[#006837] text-[#006837] hover:text-white
-                          text-xs font-bold transition-all duration-200
-                          hover:-translate-y-0.5 active:scale-95">
-                  <i data-lucide="download" class="w-3.5 h-3.5 mr-1.5"></i>
-                  Download
+                          text-xs font-bold transition-all duration-200 hover:-translate-y-0.5 active:scale-95">
+                  <i data-lucide="download" class="w-3.5 h-3.5 mr-1.5"></i> Download
                 </a>
               </div>
             </div>
           </div>
         </div>
 
-        <!-- Reply Attachment — View + Download buttons -->
         <div class="mb-5 hidden" id="viewReplyAttachmentSection">
           <h4 class="text-sm font-bold text-slate-700 uppercase tracking-wider mb-3 flex items-center">
-            <i data-lucide="paperclip" class="w-4 h-4 mr-2 text-[#8B1E7E]"></i>
-            Reply Attachment
+            <i data-lucide="paperclip" class="w-4 h-4 mr-2 text-[#8B1E7E]"></i> Reply Attachment
           </h4>
           <div class="rounded-xl border border-purple-200 bg-purple-50/40 p-4">
             <div class="flex items-center justify-between gap-3 flex-wrap">
@@ -1208,34 +1402,24 @@ function statusBadge(string $status): string
                   <p class="text-[11px] text-slate-500" id="viewReplyAttachmentMeta">—</p>
                 </div>
               </div>
-
               <div class="flex items-center gap-2 flex-shrink-0">
-                <button type="button"
-                        id="viewReplyAttachmentViewBtn"
+                <button type="button" id="viewReplyAttachmentViewBtn"
                         class="inline-flex items-center px-3 py-2 rounded-lg
                                bg-white hover:bg-[#4A154B] text-[#4A154B] hover:text-white
-                               text-xs font-bold transition-all duration-200
-                               hover:-translate-y-0.5 active:scale-95">
-                  <i data-lucide="eye" class="w-3.5 h-3.5 mr-1.5"></i>
-                  View
+                               text-xs font-bold transition-all duration-200 hover:-translate-y-0.5 active:scale-95">
+                  <i data-lucide="eye" class="w-3.5 h-3.5 mr-1.5"></i> View
                 </button>
-
-                <a id="viewReplyAttachmentDownloadBtn"
-                   href="#"
-                   download
+                <a id="viewReplyAttachmentDownloadBtn" href="#" download
                    class="inline-flex items-center px-3 py-2 rounded-lg
                           bg-emerald-50 hover:bg-[#006837] text-[#006837] hover:text-white
-                          text-xs font-bold transition-all duration-200
-                          hover:-translate-y-0.5 active:scale-95">
-                  <i data-lucide="download" class="w-3.5 h-3.5 mr-1.5"></i>
-                  Download
+                          text-xs font-bold transition-all duration-200 hover:-translate-y-0.5 active:scale-95">
+                  <i data-lucide="download" class="w-3.5 h-3.5 mr-1.5"></i> Download
                 </a>
               </div>
             </div>
           </div>
         </div>
 
-        <!-- Dates -->
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div class="rounded-xl border border-slate-200 bg-slate-50/60 p-4">
             <p class="text-[11px] uppercase tracking-wider font-bold text-slate-500 mb-1">Submitted On</p>
@@ -1250,8 +1434,7 @@ function statusBadge(string $status): string
       </div>
 
       <div class="px-6 py-4 border-t border-slate-100 bg-slate-50/50 flex items-center justify-end flex-shrink-0">
-        <button type="button"
-                data-modal-close="view"
+        <button type="button" data-modal-close="view"
                 class="px-5 py-2.5 rounded-xl text-sm font-semibold text-slate-700
                        bg-white hover:bg-slate-100 border border-slate-200
                        transition-all duration-200 active:scale-95">
@@ -1263,57 +1446,41 @@ function statusBadge(string $status): string
   </div>
 
   <!-- ============================================================ -->
-  <!-- LIGHTBOX (opens ON THE PAGE when clicking View)              -->
+  <!-- LIGHTBOX -->
   <!-- ============================================================ -->
   <div id="lightbox" class="hidden fixed inset-0 z-[100] bg-black/90 backdrop-blur-md animate-lightbox-in">
-
-    <!-- Top toolbar (uses stopPropagation so clicks here don't close) -->
     <div id="lightboxToolbar"
          class="absolute top-0 left-0 right-0 px-4 py-3 flex items-center justify-between gap-3
                 bg-gradient-to-b from-black/70 to-transparent z-10">
-
       <div class="flex items-center min-w-0 text-white">
         <i data-lucide="image" class="w-5 h-5 mr-2 flex-shrink-0"></i>
         <span class="text-sm font-semibold truncate" id="lightboxFilename">attachment</span>
       </div>
-
       <div class="flex items-center gap-2 flex-shrink-0">
-        <a id="lightboxDownloadBtn"
-           href="#"
-           download
+        <a id="lightboxDownloadBtn" href="#" download
            class="inline-flex items-center px-4 py-2 rounded-lg
                   bg-white/10 hover:bg-white/20 text-white text-sm font-semibold
                   border border-white/20 transition-all duration-200 hover:-translate-y-0.5">
-          <i data-lucide="download" class="w-4 h-4 mr-2"></i>
-          Download
+          <i data-lucide="download" class="w-4 h-4 mr-2"></i> Download
         </a>
-
-        <!-- CLOSE BUTTON — uses data-lightbox-close for reliable binding -->
-        <button type="button"
-                data-lightbox-close="1"
+        <button type="button" data-lightbox-close="1"
                 class="inline-flex items-center justify-center w-10 h-10 rounded-lg
                        bg-white/10 hover:bg-red-500/80 text-white
                        border border-white/20 transition-all duration-200
-                       active:scale-95 cursor-pointer"
-                title="Close (Esc)"
-                aria-label="Close">
+                       active:scale-95 cursor-pointer" title="Close (Esc)" aria-label="Close">
           <i data-lucide="x" class="w-5 h-5 pointer-events-none"></i>
         </button>
       </div>
     </div>
 
-    <!-- Image container (click anywhere in the empty area = close) -->
-    <div id="lightboxStage"
-         class="absolute inset-0 pt-16 pb-4 px-4 flex items-center justify-center">
-      <img id="lightboxImage"
-           src=""
-           alt="Attachment preview"
+    <div id="lightboxStage" class="absolute inset-0 pt-16 pb-4 px-4 flex items-center justify-center">
+      <img id="lightboxImage" src="" alt="Attachment preview"
            class="max-w-full max-h-full object-contain rounded-lg shadow-2xl bg-white select-none" />
     </div>
   </div>
 
   <!-- ============================================================ -->
-  <!-- ACTION SUMMARY MODAL                                         -->
+  <!-- ACTION SUMMARY MODAL -->
   <!-- ============================================================ -->
   <div id="actionModal" class="hidden fixed inset-0 z-[80] flex items-center justify-center p-4">
     <div class="absolute inset-0 bg-black/50 backdrop-blur-sm" data-modal-close="action"></div>
@@ -1328,38 +1495,27 @@ function statusBadge(string $status): string
             Ref: <span class="font-semibold text-[#8B1E7E]" id="actionGrievanceNumber">—</span>
           </p>
         </div>
-        <button type="button"
-                data-modal-close="action"
-                class="text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg p-1.5 transition-colors"
-                aria-label="Close">
+        <button type="button" data-modal-close="action"
+                class="text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg p-1.5 transition-colors" aria-label="Close">
           <i data-lucide="x" class="w-5 h-5"></i>
         </button>
       </div>
 
-      <form id="actionForm" method="post" action="grievance_action_submit.php" class="px-6 pb-6 overflow-y-auto flex-1">
-
+      <form id="actionForm" method="post" action="grievances.php" class="px-6 pb-6 overflow-y-auto flex-1">
+        <input type="hidden" name="form_action" value="action_summary" />
         <input type="hidden" name="grievance_id" id="actionGrievanceId" value="" />
 
         <div class="mb-4">
-          <label for="actionDate" class="block text-sm font-semibold text-slate-700 mb-2">
-            Date
-          </label>
-          <input type="date"
-                 id="actionDate"
-                 name="action_date"
-                 required
+          <label for="actionDate" class="block text-sm font-semibold text-slate-700 mb-2">Date</label>
+          <input type="date" id="actionDate" name="action_date" required
                  class="w-full px-4 py-2.5 border-2 border-slate-200 rounded-xl text-sm text-slate-800
                         focus:outline-none focus:border-[#4A154B] focus:ring-4 focus:ring-[#4A154B]/10
                         hover:border-[#4A154B]/40 transition-all bg-white" />
         </div>
 
         <div class="mb-4">
-          <label for="actionAttendee" class="block text-sm font-semibold text-slate-700 mb-2">
-            Attendee
-          </label>
-          <select id="actionAttendee"
-                  name="attendee"
-                  required
+          <label for="actionAttendee" class="block text-sm font-semibold text-slate-700 mb-2">Attendee</label>
+          <select id="actionAttendee" name="attendee" required
                   class="w-full px-4 py-2.5 border-2 border-slate-200 rounded-xl text-sm text-slate-800
                          focus:outline-none focus:border-[#4A154B] focus:ring-4 focus:ring-[#4A154B]/10
                          hover:border-[#4A154B]/40 transition-all bg-white">
@@ -1376,31 +1532,16 @@ function statusBadge(string $status): string
           </select>
         </div>
 
-        <div class="mb-3">
-          <label for="actionSummaryFirst" class="block text-sm font-semibold text-slate-700 mb-2">
-            Grievance summary
-          </label>
-          <textarea id="actionSummaryFirst"
-                    name="action_summary[]"
-                    rows="2"
-                    required
-                    class="w-full px-4 py-2.5 border-2 border-slate-200 rounded-xl text-sm text-slate-800
-                           focus:outline-none focus:border-[#4A154B] focus:ring-4 focus:ring-[#4A154B]/10
-                           hover:border-[#4A154B]/40 transition-all resize-none bg-white"
-                    placeholder=""></textarea>
-        </div>
+        <div id="actionPairRows" class="space-y-4"></div>
 
-        <div id="actionExtraRows" class="space-y-3 mb-1"></div>
-
-        <div class="mb-6">
-          <button type="button"
-                  id="actionAddRowBtn"
-                  title="Add another summary"
-                  class="inline-flex items-center justify-center w-10 h-10 rounded-lg
-                         bg-[#006837] hover:bg-[#00874a] text-white
+        <div class="mt-4 mb-6">
+          <button type="button" id="actionAddRowBtn" title="Add another summary"
+                  class="inline-flex items-center gap-2 px-4 py-2 rounded-lg
+                         bg-[#006837] hover:bg-[#00874a] text-white text-sm font-bold
                          shadow-md shadow-emerald-500/20 hover:shadow-emerald-500/40
                          transition-all duration-300 hover:-translate-y-0.5 active:scale-95">
-            <i data-lucide="plus" class="w-5 h-5"></i>
+            <i data-lucide="plus" class="w-4 h-4"></i>
+            <span>Add</span>
           </button>
         </div>
 
@@ -1414,8 +1555,7 @@ function statusBadge(string $status): string
             <span>Submit</span>
           </button>
 
-          <button type="button"
-                  data-modal-close="action"
+          <button type="button" data-modal-close="action"
                   class="inline-flex items-center justify-center px-6 py-2.5 rounded-xl
                          bg-[#E5097F] hover:bg-[#c90870] text-white text-sm font-bold
                          shadow-lg shadow-pink-500/30 hover:shadow-pink-500/50
@@ -1423,13 +1563,12 @@ function statusBadge(string $status): string
             <span>Cancel</span>
           </button>
         </div>
-
       </form>
     </div>
   </div>
 
   <!-- ============================================================ -->
-  <!-- LOGOUT MODAL                                                 -->
+  <!-- LOGOUT MODAL -->
   <!-- ============================================================ -->
   <div id="logoutConfirmModal" class="hidden fixed inset-0 z-[90] flex items-center justify-center p-4">
     <div class="absolute inset-0 bg-black/50 backdrop-blur-sm" onclick="closeLogoutModal()"></div>
@@ -1446,47 +1585,39 @@ function statusBadge(string $status): string
         <h3 class="text-xl font-bold text-slate-800 mb-2">Log Out?</h3>
 
         <p class="text-sm text-slate-500 leading-relaxed">
-          You are about to log out of
-          <span class="font-bold text-[#8B1E7E] break-words"><?= e($displayName) ?></span>.
+          You are about to log out of <span class="font-bold text-[#8B1E7E] break-words"><?= e($displayName) ?></span>.
         </p>
 
         <p class="text-xs text-slate-400 font-medium mt-3 flex items-center gap-1.5">
-          <i data-lucide="info" class="w-3.5 h-3.5"></i>
-          You can log back in anytime.
+          <i data-lucide="info" class="w-3.5 h-3.5"></i> You can log back in anytime.
         </p>
       </div>
 
       <div class="px-6 py-5 mt-2 flex flex-col-reverse sm:flex-row gap-3">
-        <button type="button"
-                onclick="closeLogoutModal()"
+        <button type="button" onclick="closeLogoutModal()"
                 class="flex-1 px-5 py-3 rounded-xl font-semibold text-slate-700
                        bg-slate-100 hover:bg-slate-200 border border-slate-200
                        transition-all duration-200 active:scale-95">
           Cancel
         </button>
 
-        <button type="button"
-                id="confirmLogoutBtn"
+        <button type="button" id="confirmLogoutBtn"
                 class="flex-1 px-5 py-3 rounded-xl font-bold text-white
                        bg-gradient-to-r from-red-500 via-red-600 to-rose-600
                        hover:from-red-600 hover:via-red-700 hover:to-rose-700
                        shadow-lg shadow-red-500/30 hover:shadow-red-500/50
                        transition-all duration-300 hover:-translate-y-0.5 active:scale-95
                        flex items-center justify-center gap-2">
-          <i data-lucide="log-out" class="w-4 h-4"></i>
-          <span>Log Out</span>
+          <i data-lucide="log-out" class="w-4 h-4"></i> <span>Log Out</span>
         </button>
       </div>
-
     </div>
   </div>
 
   <script>
-    if (typeof lucide !== 'undefined') {
-      lucide.createIcons();
-    }
+    if (typeof lucide !== 'undefined') { lucide.createIcons(); }
 
-    /* ---------------- Flash auto-hide ---------------- */
+    /* Flash auto-hide */
     (function () {
       ['flashSuccessBox', 'flashErrorBox'].forEach(function (id) {
         const box = document.getElementById(id);
@@ -1495,11 +1626,11 @@ function statusBadge(string $status): string
           box.classList.remove('animate-flash-in');
           box.classList.add('animate-flash-out');
           setTimeout(function () { if (box.parentNode) box.parentNode.removeChild(box); }, 500);
-        }, 3000);
+        }, 3500);
       });
     })();
 
-    /* ---------------- Sidebar ---------------- */
+    /* Sidebar */
     (function () {
       const toggleBtn = document.getElementById('sidebarToggle');
       const sidebar   = document.getElementById('managementSidebar');
@@ -1508,47 +1639,31 @@ function statusBadge(string $status): string
 
       const labels   = sidebar.querySelectorAll('.sidebar-label');
       const tooltips = sidebar.querySelectorAll('.sidebar-tooltip');
-
       let expanded = false;
 
       toggleBtn.addEventListener('click', function () {
         expanded = !expanded;
-
         if (expanded) {
-          sidebar.classList.remove('w-20');
-          sidebar.classList.add('w-64');
-          main.classList.remove('ml-20');
-          main.classList.add('ml-64');
-
-          labels.forEach(function (el) {
-            el.classList.remove('opacity-0', 'w-0');
-            el.classList.add('opacity-100', 'w-auto');
-          });
+          sidebar.classList.remove('w-20'); sidebar.classList.add('w-64');
+          main.classList.remove('ml-20'); main.classList.add('ml-64');
+          labels.forEach(function (el) { el.classList.remove('opacity-0','w-0'); el.classList.add('opacity-100','w-auto'); });
           tooltips.forEach(function (el) { el.classList.add('hidden'); });
         } else {
-          sidebar.classList.add('w-20');
-          sidebar.classList.remove('w-64');
-          main.classList.add('ml-20');
-          main.classList.remove('ml-64');
-
-          labels.forEach(function (el) {
-            el.classList.add('opacity-0', 'w-0');
-            el.classList.remove('opacity-100', 'w-auto');
-          });
+          sidebar.classList.add('w-20'); sidebar.classList.remove('w-64');
+          main.classList.add('ml-20'); main.classList.remove('ml-64');
+          labels.forEach(function (el) { el.classList.add('opacity-0','w-0'); el.classList.remove('opacity-100','w-auto'); });
           tooltips.forEach(function (el) { el.classList.remove('hidden'); });
         }
-
         setTimeout(function () { if (typeof lucide !== 'undefined') lucide.createIcons(); }, 250);
       });
     })();
 
-    /* ---------------- Profile dropdown ---------------- */
+    /* Profile dropdown */
     (function () {
-      const btn       = document.getElementById('management-dropdown-btn');
-      const menu      = document.getElementById('management-dropdown-menu');
-      const chevron   = document.getElementById('management-chevron');
+      const btn = document.getElementById('management-dropdown-btn');
+      const menu = document.getElementById('management-dropdown-menu');
+      const chevron = document.getElementById('management-chevron');
       const container = document.getElementById('management-dropdown-container');
-
       if (!btn || !menu || !container) return;
 
       btn.addEventListener('click', function (e) {
@@ -1582,7 +1697,7 @@ function statusBadge(string $status): string
       });
     })();
 
-    /* ---------------- Logout ---------------- */
+    /* Logout */
     const logoutConfirmModal = document.getElementById('logoutConfirmModal');
     const confirmLogoutBtn   = document.getElementById('confirmLogoutBtn');
     const LOGOUT_URL = '../logout.php?role=management';
@@ -1592,22 +1707,17 @@ function statusBadge(string $status): string
       document.body.classList.add('overflow-hidden');
       if (typeof lucide !== 'undefined') lucide.createIcons();
     }
-
     function closeLogoutModal() {
       logoutConfirmModal.classList.add('hidden');
       document.body.classList.remove('overflow-hidden');
     }
 
     (function () {
-      const triggers = [
-        document.getElementById('sidebarLogoutBtn'),
-        document.getElementById('dropdownLogoutBtn'),
-      ];
+      const triggers = [document.getElementById('sidebarLogoutBtn'), document.getElementById('dropdownLogoutBtn')];
       triggers.forEach(function (btn) {
         if (!btn) return;
         btn.addEventListener('click', function (e) {
-          e.preventDefault();
-          e.stopPropagation();
+          e.preventDefault(); e.stopPropagation();
           openLogoutModal();
         });
       });
@@ -1619,14 +1729,11 @@ function statusBadge(string $status): string
         window.location.href = LOGOUT_URL;
       });
     }
-
     document.addEventListener('keydown', function (e) {
-      if (e.key === 'Escape' && logoutConfirmModal && !logoutConfirmModal.classList.contains('hidden')) {
-        closeLogoutModal();
-      }
+      if (e.key === 'Escape' && logoutConfirmModal && !logoutConfirmModal.classList.contains('hidden')) closeLogoutModal();
     });
 
-    /* ---------------- Table search / pagination ---------------- */
+    /* Table search / pagination */
     (function () {
       const searchInput   = document.getElementById('searchInput');
       const entriesSelect = document.getElementById('entriesPerPage');
@@ -1637,31 +1744,26 @@ function statusBadge(string $status): string
       const prevBtn       = document.getElementById('prevPageBtn');
       const nextBtn       = document.getElementById('nextPageBtn');
       const pageBadge     = document.getElementById('currentPageBadge');
-
       if (!tableBody) return;
 
       const allRows = Array.from(tableBody.querySelectorAll('tr')).filter(function (r) {
         return !r.querySelector('td[colspan]') && !r.querySelector('script');
       });
 
-      let pageSize     = 10;
-      let currentPage  = 1;
-      let searchTerm   = '';
+      let pageSize = 10, currentPage = 1, searchTerm = '';
 
       function applyFilters() {
         const filtered = allRows.filter(function (row) {
           if (searchTerm === '') return true;
           return row.textContent.toLowerCase().indexOf(searchTerm) !== -1;
         });
-
         const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
         if (currentPage > totalPages) currentPage = totalPages;
 
         allRows.forEach(function (r) { r.style.display = 'none'; });
 
         const startIdx = (currentPage - 1) * pageSize;
-        const endIdx   = Math.min(startIdx + pageSize, filtered.length);
-
+        const endIdx = Math.min(startIdx + pageSize, filtered.length);
         filtered.slice(startIdx, endIdx).forEach(function (r) { r.style.display = ''; });
 
         if (infoStart) infoStart.textContent = filtered.length === 0 ? 0 : startIdx + 1;
@@ -1680,38 +1782,23 @@ function statusBadge(string $status): string
           const self = this;
           timer = setTimeout(function () {
             searchTerm = self.value.toLowerCase().trim();
-            currentPage = 1;
-            applyFilters();
+            currentPage = 1; applyFilters();
           }, 200);
         });
       }
-
       if (entriesSelect) {
         entriesSelect.addEventListener('change', function () {
           pageSize = parseInt(this.value, 10) || 10;
-          currentPage = 1;
-          applyFilters();
+          currentPage = 1; applyFilters();
         });
       }
-
-      if (prevBtn) {
-        prevBtn.addEventListener('click', function () {
-          if (currentPage > 1) { currentPage--; applyFilters(); }
-        });
-      }
-      if (nextBtn) {
-        nextBtn.addEventListener('click', function () {
-          currentPage++;
-          applyFilters();
-        });
-      }
+      if (prevBtn) prevBtn.addEventListener('click', function () { if (currentPage > 1) { currentPage--; applyFilters(); } });
+      if (nextBtn) nextBtn.addEventListener('click', function () { currentPage++; applyFilters(); });
 
       applyFilters();
     })();
 
-    /* ============================================================
-       MODALS
-       ============================================================ */
+    /* Modals + Lightbox */
     const replyModal  = document.getElementById('replyModal');
     const viewModal   = document.getElementById('viewModal');
     const actionModal = document.getElementById('actionModal');
@@ -1744,9 +1831,7 @@ function statusBadge(string $status): string
       el.addEventListener('click', function () { closeModal(actionModal); });
     });
 
-    /* ============================================================
-       LIGHTBOX
-       ============================================================ */
+    /* Lightbox */
     const lightboxImage       = document.getElementById('lightboxImage');
     const lightboxFilename    = document.getElementById('lightboxFilename');
     const lightboxDownloadBtn = document.getElementById('lightboxDownloadBtn');
@@ -1754,25 +1839,20 @@ function statusBadge(string $status): string
 
     function openLightbox(url, filename) {
       if (!lightbox || !lightboxImage) return;
-
       lightboxImage.src = url || '';
       if (lightboxFilename) lightboxFilename.textContent = filename || 'attachment';
-
       if (lightboxDownloadBtn) {
         lightboxDownloadBtn.setAttribute('href', url || '#');
         lightboxDownloadBtn.setAttribute('download', filename || '');
       }
-
       lightbox.classList.remove('hidden');
       document.body.classList.add('overflow-hidden');
       if (typeof lucide !== 'undefined') lucide.createIcons();
     }
-
     function closeLightbox() {
       if (!lightbox) return;
       lightbox.classList.add('hidden');
       if (lightboxImage) lightboxImage.src = '';
-
       const anyOpen = !replyModal.classList.contains('hidden')
                    || !viewModal.classList.contains('hidden')
                    || !actionModal.classList.contains('hidden')
@@ -1780,64 +1860,33 @@ function statusBadge(string $status): string
       if (!anyOpen) document.body.classList.remove('overflow-hidden');
     }
 
-    /* ---------- LIGHTBOX CLOSE HANDLERS ---------- */
-
-    // 1. Any element with data-lightbox-close="1" closes the lightbox
-    //    (this includes the X button — reliable event delegation)
     document.addEventListener('click', function (e) {
       const closeEl = e.target.closest('[data-lightbox-close="1"]');
       if (closeEl && lightbox && !lightbox.classList.contains('hidden')) {
-        e.preventDefault();
-        e.stopPropagation();
-        closeLightbox();
+        e.preventDefault(); e.stopPropagation(); closeLightbox();
       }
     });
-
-    // 2. Clicking directly on the stage background (but NOT on the image)
-    //    closes the lightbox.
     if (lightboxStage) {
-      lightboxStage.addEventListener('click', function (e) {
-        if (e.target === lightboxStage) {
-          closeLightbox();
-        }
-      });
+      lightboxStage.addEventListener('click', function (e) { if (e.target === lightboxStage) closeLightbox(); });
     }
-
-    // 3. Clicking the lightbox backdrop outside the stage/toolbar also closes it.
     if (lightbox) {
-      lightbox.addEventListener('click', function (e) {
-        if (e.target === lightbox) {
-          closeLightbox();
-        }
-      });
+      lightbox.addEventListener('click', function (e) { if (e.target === lightbox) closeLightbox(); });
     }
-
-    // 4. Prevent clicks inside the toolbar from bubbling up to lightbox's own handler.
     const lightboxToolbar = document.getElementById('lightboxToolbar');
     if (lightboxToolbar) {
       lightboxToolbar.addEventListener('click', function (e) {
-        // If it's not a close trigger and not the download link, just stop propagation
-        if (!e.target.closest('[data-lightbox-close="1"]') && !e.target.closest('#lightboxDownloadBtn')) {
-          e.stopPropagation();
-        }
+        if (!e.target.closest('[data-lightbox-close="1"]') && !e.target.closest('#lightboxDownloadBtn')) e.stopPropagation();
       });
     }
-
-    // 5. Escape key closes the lightbox (and other modals)
     document.addEventListener('keydown', function (e) {
       if (e.key !== 'Escape') return;
-
-      if (lightbox && !lightbox.classList.contains('hidden')) {
-        closeLightbox();
-        return;
-      }
-
+      if (lightbox && !lightbox.classList.contains('hidden')) { closeLightbox(); return; }
       if (replyModal  && !replyModal.classList.contains('hidden'))  closeModal(replyModal);
       else if (viewModal   && !viewModal.classList.contains('hidden'))   closeModal(viewModal);
       else if (actionModal && !actionModal.classList.contains('hidden')) closeModal(actionModal);
     });
 
-    /* ---------------- Reply modal ---------------- */
+    /* Reply modal */
     const replyForm            = document.getElementById('replyForm');
     const replyGrievanceId     = document.getElementById('replyGrievanceId');
     const replyGrievanceNumber = document.getElementById('replyGrievanceNumber');
@@ -1850,34 +1899,27 @@ function statusBadge(string $status): string
       btn.addEventListener('click', function () {
         const id  = btn.getAttribute('data-grievance-id') || '';
         const num = btn.getAttribute('data-grievance-number') || '—';
-
         if (replyGrievanceId)     replyGrievanceId.value = id;
         if (replyGrievanceNumber) replyGrievanceNumber.textContent = num;
         if (replyText)            replyText.value = '';
         if (replyCharCount)       replyCharCount.textContent = '0';
         if (replyFile)            replyFile.value = '';
         if (replyFileName)        replyFileName.textContent = 'No file chosen';
-
         openModal(replyModal);
         setTimeout(function () { if (replyText) replyText.focus(); }, 150);
       });
     });
 
     if (replyText && replyCharCount) {
-      replyText.addEventListener('input', function () {
-        replyCharCount.textContent = replyText.value.length;
-      });
+      replyText.addEventListener('input', function () { replyCharCount.textContent = replyText.value.length; });
     }
-
     if (replyFile && replyFileName) {
       replyFile.addEventListener('change', function () {
         if (replyFile.files && replyFile.files.length > 0) {
           const f = replyFile.files[0];
           if (f.size > 5 * 1024 * 1024) {
             alert('File is larger than 5 MB. Please choose a smaller file.');
-            replyFile.value = '';
-            replyFileName.textContent = 'No file chosen';
-            return;
+            replyFile.value = ''; replyFileName.textContent = 'No file chosen'; return;
           }
           replyFileName.textContent = f.name;
         } else {
@@ -1885,15 +1927,12 @@ function statusBadge(string $status): string
         }
       });
     }
-
     if (replyForm) {
       replyForm.addEventListener('submit', function (e) {
         const txt = (replyText && replyText.value.trim()) || '';
         if (txt === '') {
-          e.preventDefault();
-          alert('Please enter a reply.');
-          if (replyText) replyText.focus();
-          return;
+          e.preventDefault(); alert('Please enter a reply.');
+          if (replyText) replyText.focus(); return;
         }
         const submitBtn = replyForm.querySelector('button[type="submit"]');
         if (submitBtn) {
@@ -1903,7 +1942,7 @@ function statusBadge(string $status): string
       });
     }
 
-    /* ---------------- View modal ---------------- */
+    /* View modal */
     const viewGrievanceNumber      = document.getElementById('viewGrievanceNumber');
     const viewGrievanceType        = document.getElementById('viewGrievanceType');
     const viewGrievanceStatus      = document.getElementById('viewGrievanceStatus');
@@ -1919,14 +1958,19 @@ function statusBadge(string $status): string
     const viewCreatedAt            = document.getElementById('viewCreatedAt');
     const viewUpdatedAt            = document.getElementById('viewUpdatedAt');
 
-    // Original attachment refs
+    /* Reopen reason refs */
+    const viewReopenSection = document.getElementById('viewReopenSection');
+    const viewReopenReason  = document.getElementById('viewReopenReason');
+
+    const viewActionSection = document.getElementById('viewActionSection');
+    const viewActionList    = document.getElementById('viewActionList');
+
     const viewAttachmentSection       = document.getElementById('viewAttachmentSection');
     const viewAttachmentName          = document.getElementById('viewAttachmentName');
     const viewAttachmentMeta          = document.getElementById('viewAttachmentMeta');
     const viewAttachmentViewBtn       = document.getElementById('viewAttachmentViewBtn');
     const viewAttachmentDownloadBtn   = document.getElementById('viewAttachmentDownloadBtn');
 
-    // Reply attachment refs
     const viewReplyAttachmentSection     = document.getElementById('viewReplyAttachmentSection');
     const viewReplyAttachmentName        = document.getElementById('viewReplyAttachmentName');
     const viewReplyAttachmentMeta        = document.getElementById('viewReplyAttachmentMeta');
@@ -1948,7 +1992,11 @@ function statusBadge(string $status): string
       });
       return '<span class="inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider border ' + cls + '">' + safe + '</span>';
     }
-
+    function escapeHtml(s) {
+      return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+        return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+      });
+    }
     function filenameFromUrl(url) {
       if (!url) return 'attachment';
       try {
@@ -1957,21 +2005,12 @@ function statusBadge(string $status): string
         let name = parts[parts.length - 1] || 'attachment';
         name = name.replace(/^(reply|grv)_\d+_\d+_[a-f0-9]+_/i, '');
         return decodeURIComponent(name);
-      } catch (e) {
-        return 'attachment';
-      }
+      } catch (e) { return 'attachment'; }
     }
-
     function handleAttachmentView(url, filename, isImage) {
-      if (!url || url === '#') {
-        alert('No attachment available.');
-        return;
-      }
-      if (isImage) {
-        openLightbox(url, filename);
-      } else {
-        window.open(url, '_blank', 'noopener');
-      }
+      if (!url || url === '#') { alert('No attachment available.'); return; }
+      if (isImage) openLightbox(url, filename);
+      else window.open(url, '_blank', 'noopener');
     }
 
     document.querySelectorAll('[data-view-trigger="1"]').forEach(function (btn) {
@@ -1979,35 +2018,39 @@ function statusBadge(string $status): string
         const id  = btn.getAttribute('data-grievance-id');
         const tag = document.getElementById('grievance-data-' + id);
         if (!tag) return;
-
         let data = {};
         try { data = JSON.parse(tag.textContent); } catch (e) { return; }
 
         if (viewGrievanceNumber) viewGrievanceNumber.textContent = data.number || '—';
         if (viewGrievanceType)   viewGrievanceType.textContent   = data.type   || '—';
-
         if (viewGrievanceStatus) viewGrievanceStatus.innerHTML = buildStatusBadgeClient(data.status || 'Pending');
 
         const name = data.complainant || '—';
         if (viewComplainantName)  viewComplainantName.textContent  = name;
         if (viewComplainantEmail) viewComplainantEmail.textContent = data.email || '—';
-        if (viewComplainantInitial) {
-          viewComplainantInitial.textContent = (name.trim().charAt(0) || '?').toUpperCase();
-        }
+        if (viewComplainantInitial) viewComplainantInitial.textContent = (name.trim().charAt(0) || '?').toUpperCase();
 
         if (viewComplainantPhoneWrap && viewComplainantPhone) {
-          if (data.phone) {
-            viewComplainantPhone.textContent = data.phone;
-            viewComplainantPhoneWrap.style.display = '';
-          } else {
-            viewComplainantPhoneWrap.style.display = 'none';
-          }
+          if (data.phone) { viewComplainantPhone.textContent = data.phone; viewComplainantPhoneWrap.style.display = ''; }
+          else { viewComplainantPhoneWrap.style.display = 'none'; }
         }
 
         if (viewGrievanceSubject)     viewGrievanceSubject.textContent     = data.subject     || '—';
         if (viewGrievanceDescription) viewGrievanceDescription.textContent = data.description || '—';
 
-        // Reply text
+        /* Reopen reason */
+        if (viewReopenSection && viewReopenReason) {
+          const rr = (data.reopen_reason == null ? '' : String(data.reopen_reason)).trim();
+          if (rr !== '') {
+            viewReopenReason.textContent = rr;
+            viewReopenSection.classList.remove('hidden');
+          } else {
+            viewReopenSection.classList.add('hidden');
+            viewReopenReason.textContent = '—';
+          }
+        }
+
+        /* Reply */
         if (viewReplySection && viewGrievanceReply) {
           const reply = (data.reply_details == null ? '' : String(data.reply_details)).trim();
           if (reply !== '') {
@@ -2019,16 +2062,59 @@ function statusBadge(string $status): string
           }
         }
 
-        // ---- ORIGINAL ATTACHMENT ----
+        /* Action summaries */
+        if (viewActionSection && viewActionList) {
+          const actions = Array.isArray(data.actions) ? data.actions : [];
+          if (actions.length > 0) {
+            let html = '';
+            actions.forEach(function (act, idx) {
+              const dt      = escapeHtml(act.date || '—');
+              const aname   = escapeHtml(act.attendee_name || '—');
+              const desig   = escapeHtml(act.attendee_desig || '');
+              const summ    = escapeHtml(act.summary || '—');
+              const taken   = escapeHtml(act.action_taken || '—');
+              const by      = escapeHtml(act.created_by || '');
+
+              html +=
+                '<div class="rounded-xl border border-emerald-200 bg-emerald-50/40 p-4">' +
+                  '<div class="flex items-center justify-between gap-2 mb-2 flex-wrap">' +
+                    '<div class="flex items-center gap-2">' +
+                      '<span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider border border-emerald-300 bg-white text-emerald-700">Entry ' + (idx + 1) + '</span>' +
+                      '<span class="text-[11px] text-slate-600 flex items-center">' +
+                        '<i data-lucide="calendar" class="w-3.5 h-3.5 mr-1 text-emerald-700"></i>' + dt +
+                      '</span>' +
+                    '</div>' +
+                    '<span class="text-[11px] text-slate-600 flex items-center">' +
+                      '<i data-lucide="user-check" class="w-3.5 h-3.5 mr-1 text-emerald-700"></i>' +
+                      aname + (desig ? ' — ' + desig : '') +
+                    '</span>' +
+                  '</div>' +
+                  '<div class="mb-2">' +
+                    '<p class="text-[10px] uppercase tracking-wider font-bold text-slate-500 mb-0.5">Grievance Summary</p>' +
+                    '<p class="text-sm text-slate-800 leading-relaxed whitespace-pre-wrap break-words">' + summ + '</p>' +
+                  '</div>' +
+                  '<div class="pt-2 border-t border-emerald-200/60">' +
+                    '<p class="text-[10px] uppercase tracking-wider font-bold text-slate-500 mb-0.5">Action Taken</p>' +
+                    '<p class="text-sm text-slate-800 leading-relaxed whitespace-pre-wrap break-words">' + taken + '</p>' +
+                  '</div>' +
+                  (by ? '<p class="text-[10px] text-slate-500 mt-2">Submitted by: ' + by + '</p>' : '') +
+                '</div>';
+            });
+            viewActionList.innerHTML = html;
+            viewActionSection.classList.remove('hidden');
+          } else {
+            viewActionSection.classList.add('hidden');
+            viewActionList.innerHTML = '';
+          }
+        }
+
+        /* Original attachment */
         if (viewAttachmentSection) {
           const hasOrig = data.attachment_url && data.attachment_url.trim() !== '';
-
           if (hasOrig) {
             viewAttachmentSection.classList.remove('hidden');
-
             const origName = filenameFromUrl(data.attachment_url);
             const origExt  = (data.attachment_ext || '').toUpperCase();
-
             if (viewAttachmentName) viewAttachmentName.textContent = origName;
             if (viewAttachmentMeta) viewAttachmentMeta.textContent =
               (origExt ? origExt + ' • ' : '') + (data.attachment_is_image ? 'Image' : 'Document');
@@ -2037,32 +2123,26 @@ function statusBadge(string $status): string
               viewAttachmentDownloadBtn.setAttribute('href', data.attachment_url);
               viewAttachmentDownloadBtn.setAttribute('download', origName);
             }
-
             if (viewAttachmentViewBtn) {
               const newBtn = viewAttachmentViewBtn.cloneNode(true);
               viewAttachmentViewBtn.parentNode.replaceChild(newBtn, viewAttachmentViewBtn);
               newBtn.addEventListener('click', function (e) {
-                e.preventDefault();
-                e.stopPropagation();
+                e.preventDefault(); e.stopPropagation();
                 handleAttachmentView(data.attachment_url, origName, !!data.attachment_is_image);
               });
-              if (typeof lucide !== 'undefined') lucide.createIcons();
             }
           } else {
             viewAttachmentSection.classList.add('hidden');
           }
         }
 
-        // ---- REPLY ATTACHMENT ----
+        /* Reply attachment */
         if (viewReplyAttachmentSection) {
           const hasReply = data.reply_attachment_url && data.reply_attachment_url.trim() !== '';
-
           if (hasReply) {
             viewReplyAttachmentSection.classList.remove('hidden');
-
             const repName = filenameFromUrl(data.reply_attachment_url);
             const repExt  = (data.reply_attachment_ext || '').toUpperCase();
-
             if (viewReplyAttachmentName) viewReplyAttachmentName.textContent = repName;
             if (viewReplyAttachmentMeta) viewReplyAttachmentMeta.textContent =
               (repExt ? repExt + ' • ' : '') + (data.reply_attachment_is_image ? 'Image' : 'Document');
@@ -2071,16 +2151,13 @@ function statusBadge(string $status): string
               viewReplyAttachmentDownloadBtn.setAttribute('href', data.reply_attachment_url);
               viewReplyAttachmentDownloadBtn.setAttribute('download', repName);
             }
-
             if (viewReplyAttachmentViewBtn) {
               const newBtn = viewReplyAttachmentViewBtn.cloneNode(true);
               viewReplyAttachmentViewBtn.parentNode.replaceChild(newBtn, viewReplyAttachmentViewBtn);
               newBtn.addEventListener('click', function (e) {
-                e.preventDefault();
-                e.stopPropagation();
+                e.preventDefault(); e.stopPropagation();
                 handleAttachmentView(data.reply_attachment_url, repName, !!data.reply_attachment_is_image);
               });
-              if (typeof lucide !== 'undefined') lucide.createIcons();
             }
           } else {
             viewReplyAttachmentSection.classList.add('hidden');
@@ -2094,14 +2171,13 @@ function statusBadge(string $status): string
       });
     });
 
-    /* ---------------- Action Summary modal ---------------- */
+    /* Action Summary modal */
     const actionForm            = document.getElementById('actionForm');
     const actionGrievanceId     = document.getElementById('actionGrievanceId');
     const actionGrievanceNumber = document.getElementById('actionGrievanceNumber');
     const actionDate            = document.getElementById('actionDate');
     const actionAttendee        = document.getElementById('actionAttendee');
-    const actionSummaryFirst    = document.getElementById('actionSummaryFirst');
-    const actionExtraRows       = document.getElementById('actionExtraRows');
+    const actionPairRows        = document.getElementById('actionPairRows');
     const actionAddRowBtn       = document.getElementById('actionAddRowBtn');
 
     function todayISO() {
@@ -2111,49 +2187,72 @@ function statusBadge(string $status): string
       return d.getFullYear() + '-' + m + '-' + day;
     }
 
-    function addExtraSummaryRow() {
-      if (!actionExtraRows) return;
+    function addPairRow(isFirst) {
+      if (!actionPairRows) return;
 
       const wrap = document.createElement('div');
-      wrap.className = 'flex items-center gap-2';
-      wrap.innerHTML =
-        '<textarea name="action_summary[]" rows="2"' +
-        ' class="flex-1 px-4 py-2.5 border-2 border-slate-200 rounded-xl text-sm text-slate-800' +
-        ' focus:outline-none focus:border-[#4A154B] focus:ring-4 focus:ring-[#4A154B]/10' +
-        ' hover:border-[#4A154B]/40 transition-all resize-none bg-white"' +
-        ' placeholder=""></textarea>' +
-        '<button type="button" class="action-remove-row inline-flex items-center justify-center w-10 h-10 rounded-lg' +
-        ' bg-rose-100 hover:bg-rose-200 text-rose-700 transition-colors flex-shrink-0"' +
-        ' title="Remove">' +
-        '<i data-lucide="x" class="w-4 h-4"></i>' +
-        '</button>';
+      wrap.className = 'action-pair-row rounded-xl border border-slate-200 bg-slate-50/40 p-3';
 
-      actionExtraRows.appendChild(wrap);
+      wrap.innerHTML =
+        '<div class="mb-3">' +
+          '<label class="block text-sm font-semibold text-slate-700 mb-2">Grievance summary</label>' +
+          '<textarea name="action_summary[]" rows="2" required' +
+          ' class="w-full px-4 py-2.5 border-2 border-slate-200 rounded-xl text-sm text-slate-800 bg-white' +
+          ' focus:outline-none focus:border-[#4A154B] focus:ring-4 focus:ring-[#4A154B]/10' +
+          ' hover:border-[#4A154B]/40 transition-all resize-none"' +
+          ' placeholder=""></textarea>' +
+        '</div>' +
+        '<div class="flex items-end gap-2">' +
+          '<div class="flex-1">' +
+            '<label class="block text-sm font-semibold text-slate-700 mb-2">Action taken</label>' +
+            '<textarea name="action_taken[]" rows="2"' +
+            ' class="w-full px-4 py-2.5 border-2 border-slate-200 rounded-xl text-sm text-slate-800 bg-white' +
+            ' focus:outline-none focus:border-[#4A154B] focus:ring-4 focus:ring-[#4A154B]/10' +
+            ' hover:border-[#4A154B]/40 transition-all resize-none"' +
+            ' placeholder=""></textarea>' +
+          '</div>' +
+          '<button type="button" class="action-remove-pair inline-flex items-center justify-center w-10 h-10 rounded-lg' +
+          ' bg-rose-100 hover:bg-rose-200 text-rose-700 transition-colors flex-shrink-0 mb-[2px]"' +
+          ' title="Remove this row">' +
+          '<i data-lucide="x" class="w-4 h-4"></i>' +
+          '</button>' +
+        '</div>';
+
+      actionPairRows.appendChild(wrap);
 
       if (typeof lucide !== 'undefined') lucide.createIcons();
 
-      const removeBtn = wrap.querySelector('.action-remove-row');
+      const removeBtn = wrap.querySelector('.action-remove-pair');
       if (removeBtn) {
-        removeBtn.addEventListener('click', function () { wrap.remove(); });
+        removeBtn.addEventListener('click', function () {
+          if (actionPairRows.querySelectorAll('.action-pair-row').length > 1) {
+            wrap.remove();
+          } else {
+            alert('At least one row is required.');
+          }
+        });
       }
     }
 
+    function resetPairRows() {
+      if (!actionPairRows) return;
+      actionPairRows.innerHTML = '';
+      addPairRow(true);
+    }
+
     if (actionAddRowBtn) {
-      actionAddRowBtn.addEventListener('click', addExtraSummaryRow);
+      actionAddRowBtn.addEventListener('click', function () { addPairRow(false); });
     }
 
     document.querySelectorAll('[data-action-trigger="1"]').forEach(function (btn) {
       btn.addEventListener('click', function () {
         const id  = btn.getAttribute('data-grievance-id') || '';
         const num = btn.getAttribute('data-grievance-number') || '—';
-
         if (actionGrievanceId)     actionGrievanceId.value = id;
         if (actionGrievanceNumber) actionGrievanceNumber.textContent = num;
         if (actionDate)            actionDate.value = todayISO();
         if (actionAttendee)        actionAttendee.value = '';
-        if (actionSummaryFirst)    actionSummaryFirst.value = '';
-        if (actionExtraRows)       actionExtraRows.innerHTML = '';
-
+        resetPairRows();
         openModal(actionModal);
         setTimeout(function () { if (actionDate) actionDate.focus(); }, 150);
       });
@@ -2163,25 +2262,16 @@ function statusBadge(string $status): string
       actionForm.addEventListener('submit', function (e) {
         const dateVal = (actionDate && actionDate.value) || '';
         const attVal  = (actionAttendee && actionAttendee.value) || '';
+        if (dateVal === '') { e.preventDefault(); alert('Please select a date.'); if (actionDate) actionDate.focus(); return; }
+        if (attVal === '')  { e.preventDefault(); alert('Please select an attendee.'); if (actionAttendee) actionAttendee.focus(); return; }
 
-        if (dateVal === '') {
+        const summaries = actionForm.querySelectorAll('textarea[name="action_summary[]"]');
+        let hasAny = false;
+        summaries.forEach(function (t) { if (t.value.trim() !== '') hasAny = true; });
+        if (!hasAny) {
           e.preventDefault();
-          alert('Please select a date.');
-          if (actionDate) actionDate.focus();
-          return;
-        }
-        if (attVal === '') {
-          e.preventDefault();
-          alert('Please select an attendee.');
-          if (actionAttendee) actionAttendee.focus();
-          return;
-        }
-
-        const firstVal = (actionSummaryFirst && actionSummaryFirst.value.trim()) || '';
-        if (firstVal === '') {
-          e.preventDefault();
-          alert('Please enter at least the first grievance summary.');
-          if (actionSummaryFirst) actionSummaryFirst.focus();
+          alert('Please enter at least one grievance summary.');
+          if (summaries[0]) summaries[0].focus();
           return;
         }
 

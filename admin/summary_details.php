@@ -4,26 +4,11 @@
  * ---------------------------------------------------------------------------
  * Admin — Summary Details (Grievance Listing + Create + Bulk Upload + View + Edit + Delete)
  * Rajagiri College Grievance Redressal Portal
- *
- * Features:
- *   • Lists all grievances with role-aware complainant resolution
- *   • Live search + server-side pagination
- *   • Top-right Print + Upload + Add buttons
- *   • Eye icon  → View Details modal
- *   • Pencil    → Edit modal
- *   • Trash     → Delete confirmation modal
- *   • CREATE modal — manually insert a grievance record
- *   • BULK UPLOAD modal — import grievances from CSV with template download
- *   • Themed status badges & flash messages
- *   • Custom themed logout confirmation modal
  * ---------------------------------------------------------------------------
  */
 
 declare(strict_types=1);
 
-// ---------------------------------------------------------------------------
-// 1. SESSION START
-// ---------------------------------------------------------------------------
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
@@ -33,7 +18,7 @@ ini_set('display_startup_errors', '0');
 error_reporting(E_ALL);
 
 // ---------------------------------------------------------------------------
-// 2. AUTH GUARD
+// AUTH GUARD
 // ---------------------------------------------------------------------------
 $sessionRole = isset($_SESSION['role']) ? strtoupper((string) $_SESSION['role']) : '';
 $allowedRoles = ['ADMIN', 'MANAGEMENT', 'TEACHER'];
@@ -46,10 +31,9 @@ if (empty($_SESSION['user_id']) || !in_array($sessionRole, $allowedRoles, true))
 $userId = (int) $_SESSION['user_id'];
 
 // ---------------------------------------------------------------------------
-// 3. DATABASE CONNECTION
+// DATABASE
 // ---------------------------------------------------------------------------
 $dbFile = __DIR__ . '/../db_connect.php';
-
 $dbError = null;
 $conn    = null;
 
@@ -75,7 +59,7 @@ if (!file_exists($dbFile)) {
 }
 
 // ---------------------------------------------------------------------------
-// 4. HELPERS
+// HELPERS
 // ---------------------------------------------------------------------------
 function e(?string $v): string
 {
@@ -194,9 +178,7 @@ function resolveComplainantUser(mysqli $conn, string $role, string $name, string
     $defaultPassword = password_hash('User@' . random_int(1000, 9999), PASSWORD_BCRYPT);
 
     $stmtU = $conn->prepare("INSERT INTO users (username, password, role, status) VALUES (?, ?, ?, 'Approved')");
-    if (!$stmtU) {
-        throw new Exception('Failed to prepare user insert.');
-    }
+    if (!$stmtU) throw new Exception('Failed to prepare user insert.');
     $stmtU->bind_param('sss', $username, $defaultPassword, $userRoleEnum);
     $stmtU->execute();
     $newUserId = (int) $conn->insert_id;
@@ -215,22 +197,17 @@ function resolveComplainantUser(mysqli $conn, string $role, string $name, string
                 }
                 $chkC->close();
             }
-
             if ($classId === null) {
                 $resFirst = $conn->query("SELECT id FROM classes ORDER BY id ASC LIMIT 1");
                 if ($resFirst && $resFirst->num_rows > 0) {
                     $classId = (int) $resFirst->fetch_assoc()['id'];
                 }
             }
-
             if ($classId === null) {
                 throw new Exception('Cannot create student: no classes exist. Please add a class first.');
             }
-
             $stmtS = $conn->prepare("INSERT INTO students (user_id, class_id, name, email, contact_number) VALUES (?, ?, ?, ?, ?)");
-            if (!$stmtS) {
-                throw new Exception('Failed to prepare student insert.');
-            }
+            if (!$stmtS) throw new Exception('Failed to prepare student insert.');
             $placeholderEmail = 'student_' . $newUserId . '@rajagiri.edu';
             $stmtS->bind_param('iisss', $newUserId, $classId, $name, $placeholderEmail, $cellNo);
             $stmtS->execute();
@@ -239,9 +216,7 @@ function resolveComplainantUser(mysqli $conn, string $role, string $name, string
 
         case 'PARENT':
             $stmtP = $conn->prepare("INSERT INTO parents (user_id, name, email, contact_number) VALUES (?, ?, ?, ?)");
-            if (!$stmtP) {
-                throw new Exception('Failed to prepare parent insert.');
-            }
+            if (!$stmtP) throw new Exception('Failed to prepare parent insert.');
             $placeholderEmail = 'parent_' . $newUserId . '@rajagiri.edu';
             $stmtP->bind_param('isss', $newUserId, $name, $placeholderEmail, $cellNo);
             $stmtP->execute();
@@ -279,9 +254,7 @@ function resolveComplainantUser(mysqli $conn, string $role, string $name, string
             };
 
             $stmtC = $conn->prepare("INSERT INTO cell_members (user_id, designation_id, member_type, name, email, mobile_number) VALUES (?, ?, ?, ?, ?, ?)");
-            if (!$stmtC) {
-                throw new Exception('Failed to prepare cell member insert.');
-            }
+            if (!$stmtC) throw new Exception('Failed to prepare cell member insert.');
             $placeholderEmail = 'staff_' . $newUserId . '@rajagiri.edu';
             $stmtC->bind_param('iissss', $newUserId, $designationId, $memberType, $name, $placeholderEmail, $cellNo);
             $stmtC->execute();
@@ -293,7 +266,7 @@ function resolveComplainantUser(mysqli $conn, string $role, string $name, string
 }
 
 // ---------------------------------------------------------------------------
-// 5. FETCH ADMIN PROFILE
+// ADMIN PROFILE
 // ---------------------------------------------------------------------------
 $adminData = [
     'username'        => $_SESSION['username'] ?? 'Admin',
@@ -304,16 +277,12 @@ $adminData = [
 
 if ($conn instanceof mysqli) {
     try {
-        $sql = "SELECT  u.username,
-                        ap.name,
-                        ap.email,
-                        ap.profile_picture
-                FROM users u
-                LEFT JOIN admin_profiles ap ON ap.user_id = u.id
-                WHERE u.id = ?
-                LIMIT 1";
-
-        $stmt = $conn->prepare($sql);
+        $stmt = $conn->prepare(
+            "SELECT u.username, ap.name, ap.email, ap.profile_picture
+             FROM users u
+             LEFT JOIN admin_profiles ap ON ap.user_id = u.id
+             WHERE u.id = ? LIMIT 1"
+        );
         if ($stmt) {
             $stmt->bind_param('i', $userId);
             $stmt->execute();
@@ -338,15 +307,15 @@ $displayEmail = !empty($adminData['email']) ? $adminData['email'] : 'admin@rajag
 $hasProfilePicture = false;
 $profilePictureUrl = '';
 if (!empty($adminData['profile_picture'])) {
-    $relativeFromAdmin = '../' . ltrim((string) $adminData['profile_picture'], '/');
-    if (file_exists(__DIR__ . '/../' . ltrim((string) $adminData['profile_picture'], '/'))) {
+    $rel = ltrim((string) $adminData['profile_picture'], '/');
+    if (file_exists(__DIR__ . '/../' . $rel)) {
         $hasProfilePicture = true;
-        $profilePictureUrl = $relativeFromAdmin;
+        $profilePictureUrl = '../' . $rel;
     }
 }
 
 // ---------------------------------------------------------------------------
-// 6. FETCH GRIEVANCE TYPES
+// GRIEVANCE TYPES
 // ---------------------------------------------------------------------------
 $grievanceTypeOptions = [];
 if ($conn instanceof mysqli) {
@@ -359,11 +328,10 @@ if ($conn instanceof mysqli) {
 }
 
 // ---------------------------------------------------------------------------
-// 7. TEMPLATE CSV DOWNLOAD
+// TEMPLATE CSV DOWNLOAD
 // ---------------------------------------------------------------------------
 if (isset($_GET['download_template']) && (string) $_GET['download_template'] === '1') {
     $filename = 'summary_template.csv';
-
     header('Content-Type: text/csv; charset=utf-8');
     header('Content-Disposition: attachment; filename="' . $filename . '"');
     header('Pragma: no-cache');
@@ -391,7 +359,7 @@ if (isset($_GET['download_template']) && (string) $_GET['download_template'] ===
 }
 
 // ---------------------------------------------------------------------------
-// 8. FLASH MESSAGES
+// FLASH
 // ---------------------------------------------------------------------------
 $flashSuccess = '';
 $flashError   = '';
@@ -406,13 +374,13 @@ if (!empty($_SESSION['flash_error'])) {
 }
 
 // ---------------------------------------------------------------------------
-// 9. HANDLE FORM SUBMISSIONS
+// HANDLE POST
 // ---------------------------------------------------------------------------
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && $conn instanceof mysqli) {
 
     $action = $_POST['action'] ?? '';
 
-    // -------- CREATE --------
+    // CREATE
     if ($action === 'create_summary') {
         $role          = trim((string) ($_POST['role']            ?? 'STUDENT'));
         $name          = trim((string) ($_POST['name']            ?? ''));
@@ -433,26 +401,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $conn instanceof mysqli) {
         } else {
             try {
                 $conn->begin_transaction();
-
                 $complainantUserId = resolveComplainantUser($conn, $role, $name, $cellNo, $className);
-                $grievanceNumber = generateGrievanceNumber($conn);
+                $grievanceNumber   = generateGrievanceNumber($conn);
 
                 $status = 'Disposed';
                 $description = $complaint . ($academicYear !== '' ? "\n\nAcademic Year: " . $academicYear : '');
 
-                $sql = "INSERT INTO grievances
-                            (grievance_number, grievance_type_id, complainant_user_id, subject,
-                             description, status, reply_details, created_at, updated_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)";
-                $stmt = $conn->prepare($sql);
+                $stmt = $conn->prepare("INSERT INTO grievances
+                                            (grievance_number, grievance_type_id, complainant_user_id, subject,
+                                             description, status, reply_details, created_at, updated_at)
+                                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
                 if (!$stmt) throw new Exception('Failed to prepare grievance insert.');
 
-                $subject = mb_substr($complaint, 0, 250, 'UTF-8');
+                $subject   = mb_substr($complaint, 0, 250, 'UTF-8');
                 $createdAt = $postedDate !== '' ? $postedDate . ' 00:00:00' : date('Y-m-d H:i:s');
-                $updatedAt = $replyDate !== '' ? $replyDate . ' 00:00:00' : $createdAt;
+                $updatedAt = $replyDate  !== '' ? $replyDate  . ' 00:00:00' : $createdAt;
 
-                $stmt->bind_param(
-                    'siissssss',
+                $stmt->bind_param('siissssss',
                     $grievanceNumber, $grievanceType, $complainantUserId,
                     $subject, $description, $status, $actionTaken,
                     $createdAt, $updatedAt
@@ -477,7 +442,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $conn instanceof mysqli) {
         }
     }
 
-    // -------- EDIT --------
+    // EDIT
     if ($action === 'edit_summary') {
         $grievanceId   = (int) ($_POST['grievance_id']    ?? 0);
         $subject       = trim((string) ($_POST['subject']       ?? ''));
@@ -486,9 +451,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $conn instanceof mysqli) {
         $replyDetails  = trim((string) ($_POST['reply_details'] ?? ''));
 
         $validStatuses = ['Pending', 'In Progress', 'Disposed', 'Closed', 'Reopened'];
-        if (!in_array($status, $validStatuses, true)) {
-            $status = 'Pending';
-        }
+        if (!in_array($status, $validStatuses, true)) $status = 'Pending';
 
         if ($grievanceId <= 0) {
             $flashError = 'Invalid grievance.';
@@ -500,11 +463,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $conn instanceof mysqli) {
                                         SET subject = ?, description = ?, status = ?, reply_details = ?
                                         WHERE id = ?");
                 if (!$stmt) throw new Exception('Failed to prepare update.');
-
                 $stmt->bind_param('ssssi', $subject, $description, $status, $replyDetails, $grievanceId);
                 $stmt->execute();
                 $stmt->close();
-
                 $flashSuccess = 'Grievance updated successfully.';
             } catch (Throwable $ex) {
                 error_log('[Edit Summary] ' . $ex->getMessage());
@@ -520,25 +481,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $conn instanceof mysqli) {
         }
     }
 
-    // -------- DELETE --------
+    // DELETE
     if ($action === 'delete_summary') {
         $grievanceId = (int) ($_POST['grievance_id'] ?? 0);
         if ($grievanceId > 0) {
             try {
                 $stmt = $conn->prepare("DELETE FROM grievances WHERE id = ?");
                 if (!$stmt) throw new Exception('Failed to prepare delete.');
-
                 $stmt->bind_param('i', $grievanceId);
                 $stmt->execute();
                 $stmt->close();
-
                 $flashSuccess = 'Grievance deleted successfully.';
             } catch (Throwable $ex) {
                 error_log('[Delete Summary] ' . $ex->getMessage());
                 $flashError = 'A system error occurred while deleting the record.';
             }
         }
-
         if ($flashSuccess !== '' || $flashError !== '') {
             $_SESSION['flash_success'] = $flashSuccess;
             $_SESSION['flash_error']   = $flashError;
@@ -547,7 +505,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $conn instanceof mysqli) {
         }
     }
 
-    // -------- BULK UPLOAD --------
+    // BULK UPLOAD
     if ($action === 'bulk_upload') {
         if (!isset($_FILES['csv_file']) || !is_array($_FILES['csv_file'])) {
             $flashError = 'Please select a CSV file to upload.';
@@ -568,7 +526,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $conn instanceof mysqli) {
                     $flashError = 'Unable to read the uploaded file.';
                 } else {
                     @set_time_limit(0);
-
                     $insertedCount = 0;
                     $skippedRows   = [];
                     $rowNumber     = 0;
@@ -599,17 +556,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $conn instanceof mysqli) {
                                 continue;
                             }
 
-                            $rRole         = trim((string) ($row[0]  ?? ''));
-                            $rName         = trim((string) ($row[1]  ?? ''));
-                            $rAcademicYear = trim((string) ($row[2]  ?? ''));
-                            $rClassName    = trim((string) ($row[3]  ?? ''));
-                            $rComplaint    = trim((string) ($row[4]  ?? ''));
-                            $rGrievanceType= trim((string) ($row[5]  ?? ''));
-                            $rActionTaken  = trim((string) ($row[6]  ?? ''));
-                            $rCellNo       = trim((string) ($row[7]  ?? ''));
-                            $rPostedDate   = trim((string) ($row[8]  ?? ''));
-                            $rReplyDate    = trim((string) ($row[9]  ?? ''));
-                            $rRepliedBy    = trim((string) ($row[10] ?? ''));
+                            $rRole          = trim((string) ($row[0]  ?? ''));
+                            $rName          = trim((string) ($row[1]  ?? ''));
+                            $rAcademicYear  = trim((string) ($row[2]  ?? ''));
+                            $rClassName     = trim((string) ($row[3]  ?? ''));
+                            $rComplaint     = trim((string) ($row[4]  ?? ''));
+                            $rGrievanceType = trim((string) ($row[5]  ?? ''));
+                            $rActionTaken   = trim((string) ($row[6]  ?? ''));
+                            $rCellNo        = trim((string) ($row[7]  ?? ''));
+                            $rPostedDate    = trim((string) ($row[8]  ?? ''));
+                            $rReplyDate     = trim((string) ($row[9]  ?? ''));
+                            $rRepliedBy     = trim((string) ($row[10] ?? ''));
 
                             $rRole = preg_replace('/^\xEF\xBB\xBF/', '', $rRole) ?? $rRole;
                             $rRole = strtoupper($rRole);
@@ -650,9 +607,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $conn instanceof mysqli) {
                                                          description, status, reply_details, created_at, updated_at)
                                                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
                             if (!$stmtI) throw new Exception("Row {$rowNumber}: Failed to prepare insert.");
-
-                            $stmtI->bind_param(
-                                'siissssss',
+                            $stmtI->bind_param('siissssss',
                                 $grievanceNumber, $typeId, $complainantUserId,
                                 $subject, $description, $status, $rActionTaken,
                                 $createdAt, $updatedAt
@@ -702,21 +657,18 @@ if (!empty($_SESSION['import_skipped_rows']) && is_array($_SESSION['import_skipp
 }
 
 // ---------------------------------------------------------------------------
-// 10. QUERY PARAMS
+// QUERY PARAMS
 // ---------------------------------------------------------------------------
 $search  = trim((string) ($_GET['q']       ?? ''));
 $entries = (int) ($_GET['entries']          ?? 10);
 $page    = (int) ($_GET['page']             ?? 1);
 
-if (!in_array($entries, [10, 25, 50, 100], true)) {
-    $entries = 10;
-}
+if (!in_array($entries, [10, 25, 50, 100], true)) $entries = 10;
 if ($page < 1) $page = 1;
-
 $offset = ($page - 1) * $entries;
 
 // ---------------------------------------------------------------------------
-// 11. FETCH GRIEVANCES
+// FETCH GRIEVANCES
 // ---------------------------------------------------------------------------
 $rows       = [];
 $totalRows  = 0;
@@ -754,9 +706,7 @@ if ($conn instanceof mysqli) {
 
         $stmt = $conn->prepare($countSql);
         if ($stmt) {
-            if (!empty($params)) {
-                $stmt->bind_param($types, ...$params);
-            }
+            if (!empty($params)) $stmt->bind_param($types, ...$params);
             $stmt->execute();
             $res       = $stmt->get_result();
             $totalRows = (int) ($res ? ($res->fetch_assoc()['c'] ?? 0) : 0);
@@ -764,7 +714,6 @@ if ($conn instanceof mysqli) {
         }
 
         $totalPages = max(1, (int) ceil($totalRows / $entries));
-
         if ($page > $totalPages) {
             $page   = $totalPages;
             $offset = ($page - 1) * $entries;
@@ -838,33 +787,12 @@ if ($conn instanceof mysqli) {
             brandGold:   '#C5A059'
           },
           keyframes: {
-            fadeInUp: {
-              '0%':   { opacity: '0', transform: 'translateY(12px)' },
-              '100%': { opacity: '1', transform: 'translateY(0)' }
-            },
-            dropdownFade: {
-              '0%':   { opacity: '0', transform: 'translateY(-8px) scale(0.98)' },
-              '100%': { opacity: '1', transform: 'translateY(0) scale(1)' }
-            },
-            modalFadeIn: {
-              '0%':   { opacity: '0', transform: 'scale(0.96)' },
-              '100%': { opacity: '1', transform: 'scale(1)' }
-            },
-            confirmShake: {
-              '0%, 100%': { transform: 'translateX(0)' },
-              '20%':      { transform: 'translateX(-6px)' },
-              '40%':      { transform: 'translateX(6px)' },
-              '60%':      { transform: 'translateX(-4px)' },
-              '80%':      { transform: 'translateX(4px)' }
-            },
-            flashIn: {
-              '0%':   { opacity: '0', transform: 'translateY(-10px)' },
-              '100%': { opacity: '1', transform: 'translateY(0)' }
-            },
-            flashOut: {
-              '0%':   { opacity: '1', transform: 'translateY(0)', maxHeight: '200px' },
-              '100%': { opacity: '0', transform: 'translateY(-10px)', maxHeight: '0px' }
-            }
+            fadeInUp: { '0%': { opacity: '0', transform: 'translateY(12px)' }, '100%': { opacity: '1', transform: 'translateY(0)' } },
+            dropdownFade: { '0%': { opacity: '0', transform: 'translateY(-8px) scale(0.98)' }, '100%': { opacity: '1', transform: 'translateY(0) scale(1)' } },
+            modalFadeIn: { '0%': { opacity: '0', transform: 'scale(0.96)' }, '100%': { opacity: '1', transform: 'scale(1)' } },
+            confirmShake: { '0%, 100%': { transform: 'translateX(0)' }, '20%': { transform: 'translateX(-6px)' }, '40%': { transform: 'translateX(6px)' }, '60%': { transform: 'translateX(-4px)' }, '80%': { transform: 'translateX(4px)' } },
+            flashIn: { '0%': { opacity: '0', transform: 'translateY(-10px)' }, '100%': { opacity: '1', transform: 'translateY(0)' } },
+            flashOut: { '0%': { opacity: '1', transform: 'translateY(0)', maxHeight: '200px' }, '100%': { opacity: '0', transform: 'translateY(-10px)', maxHeight: '0px' } }
           },
           animation: {
             'fade-in-up': 'fadeInUp 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards',
@@ -881,120 +809,114 @@ if ($conn instanceof mysqli) {
 
   <link rel="stylesheet" href="../assets/css/index.css" />
 
+  <!-- ============================================================
+       PRINT STYLES — clean isolated print block
+       ============================================================ -->
   <style>
+    /* Hide print block on screen */
+    #print-area { display: none; }
+
     @media print {
-      body * { visibility: hidden; }
-      #printArea, #printArea * { visibility: visible; }
-      #printArea {
-        position: absolute;
-        left: 0;
-        top: 0;
-        width: 100%;
-        padding: 0 !important;
-        margin: 0 !important;
-      }
+      /* Fully remove on-screen UI */
+      body > .screen-only,
+      body > .screen-only * { display: none !important; }
       .no-print { display: none !important; }
-      .print-table { width: 100%; border-collapse: collapse; font-size: 11px; }
-      .print-table th, .print-table td { border: 1px solid #333; padding: 5px 7px; text-align: left; }
-      .print-table th { background-color: #f3f3f3 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-      @page { margin: 12mm; }
+
+      /* Page reset */
+      html, body {
+        margin: 0 !important;
+        padding: 0 !important;
+        background: #fff !important;
+        color: #000 !important;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+      }
+
+      /* Reveal print block */
+      #print-area {
+        display: block !important;
+        position: static !important;
+        width: 100% !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        font-family: Arial, Helvetica, sans-serif;
+        font-size: 10px;
+        color: #000;
+      }
+
+      @page {
+        size: A4 landscape;
+        margin: 10mm;
+      }
     }
   </style>
 </head>
 
 <body class="min-h-screen bg-slate-50 text-slate-800 antialiased flex flex-col">
 
-  <div class="flex min-h-screen flex-1">
+  <!-- ============================================================
+       SCREEN-ONLY WRAPPER
+       ============================================================ -->
+  <div class="screen-only flex min-h-screen flex-1">
 
     <!-- SIDEBAR -->
-    <aside class="w-20 bg-gradient-to-b from-[#4A154B] via-[#5A1B5C] to-[#006837] flex flex-col items-center py-4 shadow-2xl fixed inset-y-0 left-0 z-40 no-print">
-
+    <aside class="w-20 bg-gradient-to-b from-[#4A154B] via-[#5A1B5C] to-[#006837] flex flex-col items-center py-4 shadow-2xl fixed inset-y-0 left-0 z-40">
       <button class="text-white/80 hover:text-white mb-8 p-2 rounded-lg hover:bg-white/10 transition-colors" aria-label="Toggle sidebar">
         <i data-lucide="menu" class="w-6 h-6"></i>
       </button>
 
       <nav class="flex flex-col items-center space-y-6 flex-1">
-
-        <a href="dashboard.php"
-           class="group relative w-12 h-12 rounded-xl bg-white/10 hover:bg-white/20 flex items-center justify-center text-white transition-all hover:scale-110"
-           title="Dashboard">
+        <a href="dashboard.php" class="group relative w-12 h-12 rounded-xl bg-white/10 hover:bg-white/20 flex items-center justify-center text-white transition-all hover:scale-110" title="Dashboard">
           <i data-lucide="home" class="w-6 h-6"></i>
-          <span class="absolute left-full ml-3 hidden group-hover:block whitespace-nowrap bg-[#4A154B] text-white text-xs px-3 py-1.5 rounded-lg shadow-lg z-50">
-            Dashboard
-          </span>
+          <span class="absolute left-full ml-3 hidden group-hover:block whitespace-nowrap bg-[#4A154B] text-white text-xs px-3 py-1.5 rounded-lg shadow-lg z-50">Dashboard</span>
         </a>
-
-        <a href="profile.php"
-           class="group relative w-12 h-12 rounded-xl bg-white/10 hover:bg-white/20 flex items-center justify-center text-white transition-all hover:scale-110"
-           title="Profile">
+        <a href="profile.php" class="group relative w-12 h-12 rounded-xl bg-white/10 hover:bg-white/20 flex items-center justify-center text-white transition-all hover:scale-110" title="Profile">
           <i data-lucide="user" class="w-6 h-6"></i>
-          <span class="absolute left-full ml-3 hidden group-hover:block whitespace-nowrap bg-[#4A154B] text-white text-xs px-3 py-1.5 rounded-lg shadow-lg z-50">
-            Profile
-          </span>
+          <span class="absolute left-full ml-3 hidden group-hover:block whitespace-nowrap bg-[#4A154B] text-white text-xs px-3 py-1.5 rounded-lg shadow-lg z-50">Profile</span>
         </a>
-
       </nav>
 
-      <a href="#"
-         data-logout-trigger="1"
-         id="sidebarLogoutBtn"
-         class="group relative w-12 h-12 rounded-xl bg-white/10 hover:bg-red-500/40 flex items-center justify-center text-white transition-all hover:scale-110"
-         title="Logout">
+      <a href="#" data-logout-trigger="1" id="sidebarLogoutBtn"
+         class="group relative w-12 h-12 rounded-xl bg-white/10 hover:bg-red-500/40 flex items-center justify-center text-white transition-all hover:scale-110" title="Logout">
         <i data-lucide="log-out" class="w-6 h-6 group-hover:translate-x-0.5 transition-transform"></i>
-        <span class="absolute left-full ml-3 hidden group-hover:block whitespace-nowrap bg-red-600 text-white text-xs px-3 py-1.5 rounded-lg shadow-lg z-50">
-          Logout
-        </span>
+        <span class="absolute left-full ml-3 hidden group-hover:block whitespace-nowrap bg-red-600 text-white text-xs px-3 py-1.5 rounded-lg shadow-lg z-50">Logout</span>
       </a>
-
     </aside>
 
-    <!-- MAIN CONTENT -->
+    <!-- MAIN -->
     <div class="flex-1 ml-20 flex flex-col min-h-screen">
 
-      <!-- HEADER -->
-      <header class="bg-white border-b border-slate-200 shadow-sm sticky top-0 z-30 no-print">
+      <header class="bg-white border-b border-slate-200 shadow-sm sticky top-0 z-30">
         <div class="flex items-center justify-between px-6 py-4">
-
           <div class="flex items-center space-x-4">
             <a href="dashboard.php" class="flex items-center group">
-              <img src="../public/rcss-logo.png" alt="RCSS Logo"
-                   class="h-10 md:h-11 w-auto transition-transform group-hover:scale-105" />
+              <img src="../public/rcss-logo.png" alt="RCSS Logo" class="h-10 md:h-11 w-auto transition-transform group-hover:scale-105" />
             </a>
             <div class="hidden sm:flex items-center h-10">
               <div class="w-px h-full bg-gradient-to-b from-transparent via-slate-300 to-transparent"></div>
             </div>
-            <img src="../public/orel-grievance.png" alt="Oréll Grievance"
-                 class="hidden sm:block h-8 md:h-9 w-auto object-contain" />
+            <img src="../public/orel-grievance.png" alt="Oréll Grievance" class="hidden sm:block h-8 md:h-9 w-auto object-contain" />
           </div>
 
           <div class="relative" id="admin-dropdown-container">
-            <button id="admin-dropdown-btn"
-                    type="button"
-                    aria-haspopup="true"
-                    aria-expanded="false"
+            <button id="admin-dropdown-btn" type="button" aria-haspopup="true" aria-expanded="false"
                     class="flex items-center space-x-3 px-3 py-2 rounded-xl hover:bg-slate-100 transition-colors cursor-pointer">
-
               <?php if ($hasProfilePicture): ?>
-                <img src="<?= e($profilePictureUrl) ?>" alt="<?= e($displayName) ?>"
-                     class="w-10 h-10 rounded-full object-cover border-2 border-[#C5A059] shadow-md ring-2 ring-purple-100" />
+                <img src="<?= e($profilePictureUrl) ?>" alt="<?= e($displayName) ?>" class="w-10 h-10 rounded-full object-cover border-2 border-[#C5A059] shadow-md ring-2 ring-purple-100" />
               <?php else: ?>
                 <div class="w-10 h-10 rounded-full bg-gradient-to-br from-[#4A154B] to-[#8B1E7E] flex items-center justify-center text-white shadow-md ring-2 ring-purple-100">
                   <i data-lucide="user" class="w-5 h-5"></i>
                 </div>
               <?php endif; ?>
-
               <span class="hidden sm:block text-sm font-semibold text-slate-700"><?= e($displayName) ?></span>
               <i data-lucide="chevron-down" id="admin-chevron" class="w-4 h-4 text-slate-500 transition-transform duration-300"></i>
             </button>
 
-            <div id="admin-dropdown-menu"
-                 class="hidden absolute right-0 mt-2 w-64 bg-white rounded-xl shadow-2xl border border-slate-200 py-2 z-50 overflow-hidden">
-
+            <div id="admin-dropdown-menu" class="hidden absolute right-0 mt-2 w-64 bg-white rounded-xl shadow-2xl border border-slate-200 py-2 z-50 overflow-hidden">
               <div class="px-4 py-3 border-b border-slate-100 bg-gradient-to-r from-slate-50 to-white">
                 <div class="flex items-center space-x-3">
                   <?php if ($hasProfilePicture): ?>
-                    <img src="<?= e($profilePictureUrl) ?>" alt="<?= e($displayName) ?>"
-                         class="w-12 h-12 rounded-full object-cover border-2 border-[#C5A059]" />
+                    <img src="<?= e($profilePictureUrl) ?>" alt="<?= e($displayName) ?>" class="w-12 h-12 rounded-full object-cover border-2 border-[#C5A059]" />
                   <?php else: ?>
                     <div class="w-12 h-12 rounded-full bg-gradient-to-br from-[#4A154B] to-[#8B1E7E] flex items-center justify-center text-white">
                       <i data-lucide="user" class="w-6 h-6 text-white"></i>
@@ -1012,19 +934,16 @@ if ($conn instanceof mysqli) {
                 <span class="font-medium">Dashboard</span>
                 <i data-lucide="arrow-right" class="w-4 h-4 ml-auto opacity-0 group-hover/item:opacity-100 text-[#8B1E7E] transition-opacity"></i>
               </a>
-
               <a href="profile.php" class="flex items-center px-4 py-2.5 text-sm text-slate-700 hover:bg-gradient-to-r hover:from-pink-50 hover:to-purple-50 hover:text-[#8B1E7E] transition-all duration-200 group/item">
                 <i data-lucide="user" class="w-4 h-4 mr-3 text-[#8B1E7E] group-hover/item:scale-110 transition-transform"></i>
                 <span class="font-medium">My Profile</span>
                 <i data-lucide="arrow-right" class="w-4 h-4 ml-auto opacity-0 group-hover/item:opacity-100 text-[#8B1E7E] transition-opacity"></i>
               </a>
-
               <a href="change_password.php" class="flex items-center px-4 py-2.5 text-sm text-slate-700 hover:bg-gradient-to-r hover:from-pink-50 hover:to-purple-50 hover:text-[#8B1E7E] transition-all duration-200 group/item">
                 <i data-lucide="key" class="w-4 h-4 mr-3 text-[#8B1E7E] group-hover/item:scale-110 transition-transform"></i>
                 <span class="font-medium">Change Password</span>
                 <i data-lucide="arrow-right" class="w-4 h-4 ml-auto opacity-0 group-hover/item:opacity-100 text-[#8B1E7E] transition-opacity"></i>
               </a>
-
               <div class="border-t border-slate-100 mt-2 pt-2">
                 <a href="#" data-logout-trigger="1" id="dropdownLogoutBtn" class="flex items-center px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 transition-all duration-200 group/item">
                   <i data-lucide="log-out" class="w-4 h-4 mr-3 group-hover/item:scale-110 transition-transform"></i>
@@ -1033,25 +952,19 @@ if ($conn instanceof mysqli) {
               </div>
             </div>
           </div>
-
         </div>
       </header>
 
-      <!-- PAGE CONTENT -->
       <main class="flex-1 px-6 py-8">
 
         <!-- Breadcrumb + Action Buttons -->
-        <div class="max-w-6xl mx-auto mb-6 animate-fade-in-up no-print">
+        <div class="max-w-6xl mx-auto mb-6 animate-fade-in-up">
           <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-
             <div>
-              <h1 class="text-2xl md:text-3xl font-bold text-slate-800 mb-2 tracking-tight">
-                Summary Details
-              </h1>
+              <h1 class="text-2xl md:text-3xl font-bold text-slate-800 mb-2 tracking-tight">Summary Details</h1>
               <nav class="flex items-center space-x-2 text-sm text-slate-500">
                 <a href="dashboard.php" class="flex items-center hover:text-[#8B1E7E] transition-colors">
-                  <i data-lucide="layout-dashboard" class="w-4 h-4 mr-1"></i>
-                  Dashboard
+                  <i data-lucide="layout-dashboard" class="w-4 h-4 mr-1"></i> Dashboard
                 </a>
                 <span class="text-slate-300">/</span>
                 <span class="text-[#E5097F] font-semibold">Summary Details</span>
@@ -1059,62 +972,50 @@ if ($conn instanceof mysqli) {
             </div>
 
             <div class="flex items-center gap-2">
-              <!-- Print -->
-              <button type="button"
-                      onclick="window.print();"
-                      title="Print Summary"
+              <button type="button" onclick="window.print();" title="Print Summary"
                       class="inline-flex items-center justify-center w-11 h-11 rounded-xl bg-[#4A154B] hover:bg-[#5A1B5C]
                              text-white shadow-lg shadow-purple-500/30 hover:shadow-purple-500/50
                              transition-all duration-300 hover:-translate-y-0.5 active:scale-95">
                 <i data-lucide="printer" class="w-5 h-5"></i>
               </button>
 
-              <!-- Bulk Upload -->
-              <button type="button"
-                      onclick="openBulkUploadModal()"
-                      title="Bulk Upload Summary Details"
+              <button type="button" onclick="openBulkUploadModal()" title="Bulk Upload Summary Details"
                       class="inline-flex items-center justify-center w-11 h-11 rounded-xl bg-[#4A154B] hover:bg-[#5A1B5C]
                              text-white shadow-lg shadow-purple-500/30 hover:shadow-purple-500/50
                              transition-all duration-300 hover:-translate-y-0.5 active:scale-95">
                 <i data-lucide="upload" class="w-5 h-5"></i>
               </button>
 
-              <!-- Add -->
-              <button type="button"
-                      onclick="openCreateModal()"
-                      title="Create Summary Details"
+              <button type="button" onclick="openCreateModal()" title="Create Summary Details"
                       class="inline-flex items-center justify-center w-11 h-11 rounded-xl bg-[#4A154B] hover:bg-[#5A1B5C]
                              text-white shadow-lg shadow-purple-500/30 hover:shadow-purple-500/50
                              transition-all duration-300 hover:-translate-y-0.5 active:scale-95">
                 <i data-lucide="plus" class="w-5 h-5"></i>
               </button>
             </div>
-
           </div>
         </div>
 
-        <!-- Flash Messages -->
+        <!-- Flash -->
         <?php if ($flashSuccess !== ''): ?>
-          <div id="flashSuccessBox" class="max-w-6xl mx-auto mb-6 rounded-xl border-2 border-emerald-200 bg-emerald-50 px-4 py-3 flex items-start space-x-2 animate-flash-in overflow-hidden no-print">
+          <div id="flashSuccessBox" class="max-w-6xl mx-auto mb-6 rounded-xl border-2 border-emerald-200 bg-emerald-50 px-4 py-3 flex items-start space-x-2 animate-flash-in overflow-hidden">
             <i data-lucide="check-circle" class="w-5 h-5 text-[#006837] flex-shrink-0 mt-0.5"></i>
             <p class="text-sm text-emerald-800 font-medium"><?= e($flashSuccess) ?></p>
           </div>
         <?php endif; ?>
 
         <?php if ($flashError !== ''): ?>
-          <div id="flashErrorBox" class="max-w-6xl mx-auto mb-6 rounded-xl border-2 border-red-200 bg-red-50 px-4 py-3 flex items-start space-x-2 animate-flash-in overflow-hidden no-print">
+          <div id="flashErrorBox" class="max-w-6xl mx-auto mb-6 rounded-xl border-2 border-red-200 bg-red-50 px-4 py-3 flex items-start space-x-2 animate-flash-in overflow-hidden">
             <i data-lucide="alert-circle" class="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5"></i>
             <p class="text-sm text-red-700 font-medium"><?= e($flashError) ?></p>
           </div>
         <?php endif; ?>
 
         <?php if (!empty($importSkippedRows)): ?>
-          <div class="max-w-6xl mx-auto mb-6 rounded-xl border-2 border-amber-200 bg-amber-50 px-4 py-3 animate-fade-in-up no-print">
+          <div class="max-w-6xl mx-auto mb-6 rounded-xl border-2 border-amber-200 bg-amber-50 px-4 py-3 animate-fade-in-up">
             <div class="flex items-start space-x-2 mb-2">
               <i data-lucide="alert-triangle" class="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5"></i>
-              <p class="text-sm font-semibold text-amber-800">
-                Some rows were skipped during import (<?= count($importSkippedRows) ?>):
-              </p>
+              <p class="text-sm font-semibold text-amber-800">Some rows were skipped during import (<?= count($importSkippedRows) ?>):</p>
             </div>
             <ul class="text-xs text-amber-700 space-y-1 ml-7 list-disc">
               <?php foreach (array_slice($importSkippedRows, 0, 15) as $sk): ?>
@@ -1128,10 +1029,9 @@ if ($conn instanceof mysqli) {
         <?php endif; ?>
 
         <!-- TABLE CONTROLS -->
-        <div class="max-w-6xl mx-auto mb-5 animate-fade-in-up no-print" style="animation-delay: 60ms;">
+        <div class="max-w-6xl mx-auto mb-5 animate-fade-in-up" style="animation-delay: 60ms;">
           <form method="GET" action="summary_details.php" id="filterForm" class="bg-white rounded-xl shadow-sm border border-slate-200/70 px-5 py-4">
             <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-
               <div class="flex items-center space-x-3">
                 <span class="text-sm text-slate-600">Show</span>
                 <select name="entries" id="entriesPerPage"
@@ -1148,27 +1048,20 @@ if ($conn instanceof mysqli) {
 
               <div class="relative w-full sm:w-80">
                 <i data-lucide="search" class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400"></i>
-                <input type="text"
-                       name="q"
-                       id="searchInput"
-                       value="<?= e($search) ?>"
-                       placeholder="Search.."
-                       autocomplete="off"
+                <input type="text" name="q" id="searchInput" value="<?= e($search) ?>" placeholder="Search.." autocomplete="off"
                        class="w-full pl-10 pr-4 py-2 border-2 border-slate-200 rounded-lg text-sm
                               focus:outline-none focus:border-[#4A154B] focus:ring-4 focus:ring-[#4A154B]/10
                               hover:border-[#4A154B]/40 transition-all bg-white" />
               </div>
-
             </div>
           </form>
         </div>
 
-        <!-- DATA TABLE -->
-        <div class="max-w-6xl mx-auto animate-fade-in-up" id="printArea" style="animation-delay: 100ms;">
+        <!-- DATA TABLE (on screen) -->
+        <div class="max-w-6xl mx-auto animate-fade-in-up" style="animation-delay: 100ms;">
           <div class="bg-white rounded-2xl shadow-lg border border-slate-200/70 overflow-hidden">
-
             <div class="overflow-x-auto">
-              <table class="w-full print-table" id="summaryTable">
+              <table class="w-full" id="summaryTable">
                 <thead>
                   <tr class="bg-[#4A154B] text-white">
                     <th class="px-6 py-4 text-left text-xs font-bold uppercase tracking-wider">Sl.No.</th>
@@ -1193,23 +1086,23 @@ if ($conn instanceof mysqli) {
                     <?php foreach ($rows as $index => $r): ?>
                       <?php
                         $gId        = (int) $r['id'];
-                        $gNumber    = (string) ($r['grievance_number']      ?? '');
-                        $gName      = (string) ($r['complainant_name']      ?? 'N/A');
-                        $gClass     = (string) ($r['class_or_department']   ?? '—');
-                        $gSubject   = (string) ($r['subject']               ?? '—');
-                        $gDesc      = (string) ($r['description']           ?? '');
-                        $gReply     = (string) ($r['reply_details']         ?? '');
-                        $gFeedback  = (string) ($r['feedback_details']      ?? '');
-                        $gType      = (string) ($r['type_name']             ?? '—');
-                        $gDate      = (string) ($r['created_at']            ?? '');
-                        $gUpd       = (string) ($r['updated_at']            ?? '');
-                        $gRole      = (string) ($r['complainant_role']      ?? '');
-                        $gStatus    = (string) ($r['status']                ?? 'Pending');
+                        $gNumber    = (string) ($r['grievance_number']    ?? '');
+                        $gName      = (string) ($r['complainant_name']    ?? 'N/A');
+                        $gClass     = (string) ($r['class_or_department'] ?? '—');
+                        $gSubject   = (string) ($r['subject']             ?? '—');
+                        $gDesc      = (string) ($r['description']         ?? '');
+                        $gReply     = (string) ($r['reply_details']       ?? '');
+                        $gFeedback  = (string) ($r['feedback_details']    ?? '');
+                        $gType      = (string) ($r['type_name']           ?? '—');
+                        $gDate      = (string) ($r['created_at']          ?? '');
+                        $gUpd       = (string) ($r['updated_at']          ?? '');
+                        $gRole      = (string) ($r['complainant_role']    ?? '');
+                        $gStatus    = (string) ($r['status']              ?? 'Pending');
 
                         $formattedDate    = '—';
                         $formattedUpdated = '—';
-                        if ($gDate !== '' && strtotime($gDate) !== false) $formattedDate = date('Y-m-d', strtotime($gDate));
-                        if ($gUpd !== ''  && strtotime($gUpd)  !== false) $formattedUpdated = date('Y-m-d', strtotime($gUpd));
+                        if ($gDate !== '' && strtotime($gDate) !== false) $formattedDate    = date('Y-m-d', strtotime($gDate));
+                        if ($gUpd  !== '' && strtotime($gUpd)  !== false) $formattedUpdated = date('Y-m-d', strtotime($gUpd));
 
                         $statusCls   = statusBadgeClass($gStatus);
                         $globalIndex = $offset + $index + 1;
@@ -1221,12 +1114,10 @@ if ($conn instanceof mysqli) {
                         <td class="px-6 py-4 text-sm text-slate-700 max-w-[260px]"><?= e($gSubject) ?></td>
                         <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-600"><?= e($formattedDate) ?></td>
                         <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-slate-700"><?= e(roleLabel($gRole)) ?></td>
-                        <td class="px-6 py-4 whitespace-nowrap text-center no-print">
+                        <td class="px-6 py-4 whitespace-nowrap text-center">
                           <div class="inline-flex items-center gap-1.5">
 
-                            <!-- VIEW -->
-                            <button type="button"
-                                    title="View grievance"
+                            <button type="button" title="View grievance"
                                     onclick='openViewModal(<?= json_encode([
                                         "grievance_number" => $gNumber,
                                         "name"             => $gName,
@@ -1247,9 +1138,7 @@ if ($conn instanceof mysqli) {
                               <i data-lucide="eye" class="w-4 h-4"></i>
                             </button>
 
-                            <!-- EDIT -->
-                            <button type="button"
-                                    title="Edit grievance"
+                            <button type="button" title="Edit grievance"
                                     onclick='openEditModal(<?= json_encode([
                                         "id"           => $gId,
                                         "number"       => $gNumber,
@@ -1264,9 +1153,7 @@ if ($conn instanceof mysqli) {
                               <i data-lucide="pencil" class="w-4 h-4"></i>
                             </button>
 
-                            <!-- DELETE -->
-                            <button type="button"
-                                    title="Delete grievance"
+                            <button type="button" title="Delete grievance"
                                     onclick='confirmDelete(<?= $gId ?>, <?= json_encode($gNumber !== '' ? $gNumber : $gSubject, JSON_HEX_APOS | JSON_HEX_QUOT) ?>)'
                                     class="inline-flex w-9 h-9 rounded-full bg-purple-50 hover:bg-red-500
                                            items-center justify-center text-[#4A154B] hover:text-white
@@ -1289,10 +1176,9 @@ if ($conn instanceof mysqli) {
               </table>
             </div>
 
-            <!-- Footer Info & Pagination -->
-            <div class="px-6 py-4 bg-slate-50/50 border-t border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-4 no-print">
-
-              <p class="text-sm text-slate-600" id="tableInfo">
+            <!-- Pagination -->
+            <div class="px-6 py-4 bg-slate-50/50 border-t border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-4">
+              <p class="text-sm text-slate-600">
                 Showing
                 <span class="font-semibold text-slate-900"><?= $totalRows > 0 ? ($offset + 1) : 0 ?></span>
                 to
@@ -1310,68 +1196,149 @@ if ($conn instanceof mysqli) {
 
                 <?php if ($page > 1): ?>
                   <a href="<?= e($qsBase . '&page=' . ($page - 1)) ?>"
-                     class="px-4 py-2 rounded-lg text-sm font-medium text-slate-700 bg-white hover:bg-slate-100 border border-slate-200 transition-colors">
-                    Previous
-                  </a>
+                     class="px-4 py-2 rounded-lg text-sm font-medium text-slate-700 bg-white hover:bg-slate-100 border border-slate-200 transition-colors">Previous</a>
                 <?php else: ?>
-                  <button type="button"
-                          class="px-4 py-2 rounded-lg text-sm font-medium text-slate-400 bg-slate-50 border border-slate-200 cursor-not-allowed"
-                          disabled>
-                    Previous
-                  </button>
+                  <button type="button" class="px-4 py-2 rounded-lg text-sm font-medium text-slate-400 bg-slate-50 border border-slate-200 cursor-not-allowed" disabled>Previous</button>
                 <?php endif; ?>
 
                 <?php if ($page < $totalPages): ?>
                   <a href="<?= e($qsBase . '&page=' . ($page + 1)) ?>"
-                     class="px-4 py-2 rounded-lg text-sm font-medium text-slate-700 bg-white hover:bg-slate-100 border border-slate-200 transition-colors">
-                    Next
-                  </a>
+                     class="px-4 py-2 rounded-lg text-sm font-medium text-slate-700 bg-white hover:bg-slate-100 border border-slate-200 transition-colors">Next</a>
                 <?php else: ?>
-                  <button type="button"
-                          class="px-4 py-2 rounded-lg text-sm font-medium text-slate-400 bg-slate-50 border border-slate-200 cursor-not-allowed"
-                          disabled>
-                    Next
-                  </button>
+                  <button type="button" class="px-4 py-2 rounded-lg text-sm font-medium text-slate-400 bg-slate-50 border border-slate-200 cursor-not-allowed" disabled>Next</button>
                 <?php endif; ?>
               </div>
-
             </div>
-
           </div>
         </div>
 
       </main>
 
-      <!-- FOOTER -->
-      <footer class="bg-gradient-to-r from-purple-200 via-pink-100 to-purple-200 border-t border-purple-200/60 mt-auto no-print">
+      <footer class="bg-gradient-to-r from-purple-200 via-pink-100 to-purple-200 border-t border-purple-200/60 mt-auto">
         <div class="px-6 py-6">
           <div class="max-w-7xl mx-auto text-center">
             <p class="text-xs text-slate-700">
               Copyright &copy; <?= date('Y') ?>
-              <span class="font-bold text-[#006837]">Rajagiri College of Social Sciences</span>.
-              All rights reserved.
+              <span class="font-bold text-[#006837]">Rajagiri College of Social Sciences</span>. All rights reserved.
             </p>
             <p class="text-xs text-slate-700 mt-1">
               Powered by
-              <span class="font-bold bg-gradient-to-r from-[#4A154B] to-[#E5097F] bg-clip-text text-transparent ml-1">
-                Orell
-              </span>
+              <span class="font-bold bg-gradient-to-r from-[#4A154B] to-[#E5097F] bg-clip-text text-transparent ml-1">Orell</span>
             </p>
           </div>
         </div>
       </footer>
+    </div>
+  </div>
+  <!-- END .screen-only -->
 
+  <!-- ============================================================
+       PRINT-ONLY AREA — inline styles only
+       ============================================================ -->
+  <div id="print-area">
+    <!-- Header -->
+    <table style="width:100%;border-collapse:collapse;margin-bottom:8px;">
+      <tr>
+        <td style="vertical-align:middle;width:60%;">
+          <table style="border-collapse:collapse;">
+            <tr>
+              <td style="vertical-align:middle;padding-right:10px;">
+                <img src="../public/rcss-logo.png" alt="RCSS" style="height:44px;width:auto;" />
+              </td>
+              <td style="vertical-align:middle;">
+                <div style="font-size:13px;font-weight:bold;color:#006837;text-transform:uppercase;letter-spacing:0.5px;">
+                  Rajagiri College of Social Sciences
+                </div>
+                <div style="font-size:10px;color:#555;padding-top:2px;">
+                  Grievance Redressal Portal
+                </div>
+              </td>
+            </tr>
+          </table>
+        </td>
+        <td style="vertical-align:middle;text-align:right;width:40%;font-size:11px;font-weight:bold;color:#333;">
+          Date: <?= date('d-m-Y') ?>
+        </td>
+      </tr>
+    </table>
+
+    <!-- Title -->
+    <div style="font-size:18px;font-weight:bold;color:#111;margin:0 0 8px 0;">Summary Details</div>
+
+    <!-- Meta line -->
+    <table style="width:100%;border-collapse:collapse;font-size:10.5px;color:#333;margin-bottom:10px;">
+      <tr>
+        <td style="padding-bottom:6px;">
+          <strong style="color:#111;">Total records:</strong> <?= $totalRows ?>
+          &nbsp;&nbsp;|&nbsp;&nbsp;
+          <strong style="color:#111;">Generated on:</strong> <?= date('d-m-Y H:i') ?>
+        </td>
+        <td style="padding-bottom:6px;text-align:right;">
+          <?php if ($search !== ''): ?>
+            <strong style="color:#111;">Search:</strong> <?= e($search) ?>
+          <?php endif; ?>
+        </td>
+      </tr>
+    </table>
+
+    <!-- Table -->
+    <table style="width:100%;border-collapse:collapse;table-layout:fixed;font-size:9px;color:#000;">
+      <thead>
+        <tr>
+          <th style="border:1px solid #333;background:#eaeaea;padding:4px 5px;text-align:left;font-size:9px;font-weight:bold;width:4%;">Sl.No.</th>
+          <th style="border:1px solid #333;background:#eaeaea;padding:4px 5px;text-align:left;font-size:9px;font-weight:bold;width:14%;">Name</th>
+          <th style="border:1px solid #333;background:#eaeaea;padding:4px 5px;text-align:left;font-size:9px;font-weight:bold;width:14%;">Class/Department</th>
+          <th style="border:1px solid #333;background:#eaeaea;padding:4px 5px;text-align:left;font-size:9px;font-weight:bold;width:26%;">Complaint</th>
+          <th style="border:1px solid #333;background:#eaeaea;padding:4px 5px;text-align:left;font-size:9px;font-weight:bold;width:9%;">Posted Date</th>
+          <th style="border:1px solid #333;background:#eaeaea;padding:4px 5px;text-align:left;font-size:9px;font-weight:bold;width:10%;">Role</th>
+          <th style="border:1px solid #333;background:#eaeaea;padding:4px 5px;text-align:left;font-size:9px;font-weight:bold;width:10%;">Status</th>
+          <th style="border:1px solid #333;background:#eaeaea;padding:4px 5px;text-align:left;font-size:9px;font-weight:bold;width:13%;">Action Taken</th>
+        </tr>
+      </thead>
+      <tbody>
+        <?php if (empty($rows)): ?>
+          <tr>
+            <td colspan="8" style="border:1px solid #333;padding:10px;text-align:center;">
+              No records available.
+            </td>
+          </tr>
+        <?php else: ?>
+          <?php foreach ($rows as $i => $r): ?>
+            <?php
+              $rDate = !empty($r['created_at']) ? date('Y-m-d', strtotime((string) $r['created_at'])) : '—';
+              $printDesc  = trim(preg_replace('/\s+/', ' ', (string) ($r['description'] ?? '')));
+              $printReply = trim(preg_replace('/\s+/', ' ', (string) ($r['reply_details'] ?? '')));
+            ?>
+            <tr>
+              <td style="border:1px solid #333;padding:4px 5px;vertical-align:top;text-align:center;"><?= $i + 1 ?></td>
+              <td style="border:1px solid #333;padding:4px 5px;vertical-align:top;word-wrap:break-word;"><?= e($r['complainant_name'] ?? 'N/A') ?></td>
+              <td style="border:1px solid #333;padding:4px 5px;vertical-align:top;word-wrap:break-word;"><?= e($r['class_or_department'] ?? '—') ?></td>
+              <td style="border:1px solid #333;padding:4px 5px;vertical-align:top;word-wrap:break-word;"><?= e($printDesc !== '' ? $printDesc : '—') ?></td>
+              <td style="border:1px solid #333;padding:4px 5px;vertical-align:top;white-space:nowrap;"><?= e($rDate) ?></td>
+              <td style="border:1px solid #333;padding:4px 5px;vertical-align:top;text-transform:uppercase;"><?= e(roleLabel((string) ($r['complainant_role'] ?? ''))) ?></td>
+              <td style="border:1px solid #333;padding:4px 5px;vertical-align:top;text-transform:uppercase;font-weight:bold;"><?= e($r['status'] ?? '—') ?></td>
+              <td style="border:1px solid #333;padding:4px 5px;vertical-align:top;word-wrap:break-word;"><?= e($printReply !== '' ? $printReply : '—') ?></td>
+            </tr>
+          <?php endforeach; ?>
+        <?php endif; ?>
+      </tbody>
+    </table>
+
+    <!-- Footer -->
+    <div style="margin-top:10px;font-size:10px;color:#333;">
+      <strong>Total records:</strong> <?= $totalRows ?>
+      &nbsp;&nbsp;|&nbsp;&nbsp;
+      <strong>Generated on:</strong> <?= date('d-m-Y H:i') ?>
     </div>
   </div>
 
-  <!-- ============================================================
-       VIEW DETAILS MODAL
-       ============================================================ -->
+  <!-- ============================================================ -->
+  <!-- VIEW DETAILS MODAL -->
+  <!-- ============================================================ -->
   <div id="viewModal" class="hidden fixed inset-0 z-[65] flex items-center justify-center p-4">
     <div class="absolute inset-0 bg-black/50 backdrop-blur-sm" onclick="closeViewModal()"></div>
 
     <div class="relative w-full max-w-3xl bg-white rounded-2xl shadow-2xl animate-modal-in overflow-hidden">
-
       <div class="h-1.5 w-full bg-gradient-to-r from-[#6A2C8A] via-[#8B1E7E] to-[#C43A7A]"></div>
 
       <div class="flex items-center justify-between px-6 py-4 border-b border-slate-100">
@@ -1397,14 +1364,11 @@ if ($conn instanceof mysqli) {
             <div class="min-w-0">
               <p id="viewName" class="text-base font-bold text-slate-800 break-words">—</p>
               <p class="text-xs text-slate-500">
-                <span id="viewRole">—</span> ·
-                <span id="viewClassDept">—</span>
+                <span id="viewRole">—</span> · <span id="viewClassDept">—</span>
               </p>
             </div>
           </div>
-          <span id="viewStatus" class="inline-flex items-center px-3 py-1 text-xs font-semibold rounded-full border">
-            —
-          </span>
+          <span id="viewStatus" class="inline-flex items-center px-3 py-1 text-xs font-semibold rounded-full border">—</span>
         </div>
 
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -1459,18 +1423,16 @@ if ($conn instanceof mysqli) {
           Close
         </button>
       </div>
-
     </div>
   </div>
 
-  <!-- ============================================================
-       EDIT MODAL
-       ============================================================ -->
+  <!-- ============================================================ -->
+  <!-- EDIT MODAL -->
+  <!-- ============================================================ -->
   <div id="editModal" class="hidden fixed inset-0 z-[66] flex items-center justify-center p-4">
     <div class="absolute inset-0 bg-black/50 backdrop-blur-sm" onclick="closeEditModal()"></div>
 
     <div class="relative w-full max-w-2xl bg-white rounded-2xl shadow-2xl animate-modal-in overflow-hidden">
-
       <div class="h-1.5 w-full bg-gradient-to-r from-[#6A2C8A] via-[#8B1E7E] to-[#C43A7A]"></div>
 
       <div class="flex items-center justify-between px-6 py-4 border-b border-slate-100">
@@ -1497,33 +1459,23 @@ if ($conn instanceof mysqli) {
         </div>
 
         <div class="space-y-2">
-          <label for="edit_subject" class="block text-sm font-semibold text-slate-700">
-            Subject <span class="text-[#E5097F]">*</span>
-          </label>
-          <input type="text" name="subject" id="edit_subject" required
-                 placeholder="Enter subject"
-                 class="w-full px-4 py-3 border-2 border-slate-200 rounded-xl bg-white text-slate-800 font-medium
-                        placeholder-slate-400
+          <label for="edit_subject" class="block text-sm font-semibold text-slate-700">Subject <span class="text-[#E5097F]">*</span></label>
+          <input type="text" name="subject" id="edit_subject" required placeholder="Enter subject"
+                 class="w-full px-4 py-3 border-2 border-slate-200 rounded-xl bg-white text-slate-800 font-medium placeholder-slate-400
                         focus:outline-none focus:border-[#4A154B] focus:ring-4 focus:ring-[#4A154B]/10
                         hover:border-[#4A154B]/40 transition-all" />
         </div>
 
         <div class="space-y-2">
-          <label for="edit_description" class="block text-sm font-semibold text-slate-700">
-            Description <span class="text-[#E5097F]">*</span>
-          </label>
-          <textarea name="description" id="edit_description" required rows="4"
-                    placeholder="Enter description"
-                    class="w-full px-4 py-3 border-2 border-slate-200 rounded-xl bg-white text-slate-800 font-medium
-                           placeholder-slate-400 resize-none
+          <label for="edit_description" class="block text-sm font-semibold text-slate-700">Description <span class="text-[#E5097F]">*</span></label>
+          <textarea name="description" id="edit_description" required rows="4" placeholder="Enter description"
+                    class="w-full px-4 py-3 border-2 border-slate-200 rounded-xl bg-white text-slate-800 font-medium placeholder-slate-400 resize-none
                            focus:outline-none focus:border-[#4A154B] focus:ring-4 focus:ring-[#4A154B]/10
                            hover:border-[#4A154B]/40 transition-all"></textarea>
         </div>
 
         <div class="space-y-2">
-          <label for="edit_status" class="block text-sm font-semibold text-slate-700">
-            Status <span class="text-[#E5097F]">*</span>
-          </label>
+          <label for="edit_status" class="block text-sm font-semibold text-slate-700">Status <span class="text-[#E5097F]">*</span></label>
           <select name="status" id="edit_status" required
                   class="w-full px-4 py-3 border-2 border-slate-200 rounded-xl appearance-none bg-white text-slate-800 font-medium
                          focus:outline-none focus:border-[#4A154B] focus:ring-4 focus:ring-[#4A154B]/10
@@ -1537,42 +1489,30 @@ if ($conn instanceof mysqli) {
         </div>
 
         <div class="space-y-2">
-          <label for="edit_reply_details" class="block text-sm font-semibold text-slate-700">
-            Reply / Action Taken
-          </label>
-          <textarea name="reply_details" id="edit_reply_details" rows="3"
-                    placeholder="Enter reply or action taken"
-                    class="w-full px-4 py-3 border-2 border-slate-200 rounded-xl bg-white text-slate-800 font-medium
-                           placeholder-slate-400 resize-none
+          <label for="edit_reply_details" class="block text-sm font-semibold text-slate-700">Reply / Action Taken</label>
+          <textarea name="reply_details" id="edit_reply_details" rows="3" placeholder="Enter reply or action taken"
+                    class="w-full px-4 py-3 border-2 border-slate-200 rounded-xl bg-white text-slate-800 font-medium placeholder-slate-400 resize-none
                            focus:outline-none focus:border-[#4A154B] focus:ring-4 focus:ring-[#4A154B]/10
                            hover:border-[#4A154B]/40 transition-all"></textarea>
         </div>
 
         <div class="flex justify-center pt-3 gap-3">
-          <button type="button"
-                  onclick="closeEditModal()"
-                  class="px-6 py-3 rounded-xl font-semibold text-slate-700
-                         bg-slate-100 hover:bg-slate-200 border border-slate-200
-                         transition-all duration-200 active:scale-95">
+          <button type="button" onclick="closeEditModal()"
+                  class="px-6 py-3 rounded-xl font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-200 transition-all duration-200 active:scale-95">
             Cancel
           </button>
           <button type="submit"
-                  class="px-8 py-3 rounded-xl
-                         bg-gradient-to-r from-[#6A2C8A] via-[#8B1E7E] to-[#C43A7A]
-                         hover:from-[#5A1C7A] hover:via-[#7B0E6E] hover:to-[#B42A6A]
-                         text-white font-bold shadow-lg shadow-purple-500/30 hover:shadow-purple-500/50
-                         transition-all duration-300 hover:-translate-y-0.5 active:scale-95">
+                  class="px-8 py-3 rounded-xl bg-gradient-to-r from-[#6A2C8A] via-[#8B1E7E] to-[#C43A7A] hover:from-[#5A1C7A] hover:via-[#7B0E6E] hover:to-[#B42A6A] text-white font-bold shadow-lg shadow-purple-500/30 hover:shadow-purple-500/50 transition-all duration-300 hover:-translate-y-0.5 active:scale-95">
             Save Changes
           </button>
         </div>
       </form>
-
     </div>
   </div>
 
-  <!-- ============================================================
-       DELETE CONFIRMATION MODAL
-       ============================================================ -->
+  <!-- ============================================================ -->
+  <!-- DELETE CONFIRMATION MODAL -->
+  <!-- ============================================================ -->
   <div id="deleteConfirmModal" class="hidden fixed inset-0 z-[67] flex items-center justify-center p-4">
     <div class="absolute inset-0 bg-black/50 backdrop-blur-sm" onclick="closeDeleteModal()"></div>
 
@@ -1580,8 +1520,7 @@ if ($conn instanceof mysqli) {
       <div class="h-1.5 w-full bg-gradient-to-r from-[#6A2C8A] via-[#8B1E7E] to-[#C43A7A]"></div>
 
       <div class="px-6 pt-6 pb-2 flex flex-col items-center text-center">
-        <div class="w-16 h-16 rounded-full flex items-center justify-center mb-4
-                    bg-gradient-to-br from-red-100 to-pink-100 ring-4 ring-red-50">
+        <div class="w-16 h-16 rounded-full flex items-center justify-center mb-4 bg-gradient-to-br from-red-100 to-pink-100 ring-4 ring-red-50">
           <i data-lucide="trash-2" class="w-8 h-8 text-red-500"></i>
         </div>
 
@@ -1593,44 +1532,31 @@ if ($conn instanceof mysqli) {
         </p>
 
         <p class="text-xs text-red-500 font-medium mt-3 flex items-center gap-1.5">
-          <i data-lucide="alert-triangle" class="w-3.5 h-3.5"></i>
-          This action cannot be undone.
+          <i data-lucide="alert-triangle" class="w-3.5 h-3.5"></i> This action cannot be undone.
         </p>
       </div>
 
       <div class="px-6 py-5 mt-2 flex flex-col-reverse sm:flex-row gap-3">
-        <button type="button"
-                onclick="closeDeleteModal()"
-                class="flex-1 px-5 py-3 rounded-xl font-semibold text-slate-700
-                       bg-slate-100 hover:bg-slate-200 border border-slate-200
-                       transition-all duration-200 active:scale-95">
+        <button type="button" onclick="closeDeleteModal()"
+                class="flex-1 px-5 py-3 rounded-xl font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-200 transition-all duration-200 active:scale-95">
           Cancel
         </button>
 
-        <button type="button"
-                id="confirmDeleteBtn"
-                class="flex-1 px-5 py-3 rounded-xl font-bold text-white
-                       bg-gradient-to-r from-red-500 via-red-600 to-rose-600
-                       hover:from-red-600 hover:via-red-700 hover:to-rose-700
-                       shadow-lg shadow-red-500/30 hover:shadow-red-500/50
-                       transition-all duration-300 hover:-translate-y-0.5 active:scale-95
-                       flex items-center justify-center gap-2">
-          <i data-lucide="trash-2" class="w-4 h-4"></i>
-          <span>Delete</span>
+        <button type="button" id="confirmDeleteBtn"
+                class="flex-1 px-5 py-3 rounded-xl font-bold text-white bg-gradient-to-r from-red-500 via-red-600 to-rose-600 hover:from-red-600 hover:via-red-700 hover:to-rose-700 shadow-lg shadow-red-500/30 hover:shadow-red-500/50 transition-all duration-300 hover:-translate-y-0.5 active:scale-95 flex items-center justify-center gap-2">
+          <i data-lucide="trash-2" class="w-4 h-4"></i> <span>Delete</span>
         </button>
       </div>
-
     </div>
   </div>
 
-  <!-- ============================================================
-       CREATE SUMMARY DETAILS MODAL
-       ============================================================ -->
+  <!-- ============================================================ -->
+  <!-- CREATE MODAL -->
+  <!-- ============================================================ -->
   <div id="createSummaryModal" class="hidden fixed inset-0 z-[60] flex items-center justify-center p-4">
     <div class="absolute inset-0 bg-black/40 backdrop-blur-sm" onclick="closeCreateModal()"></div>
 
     <div class="relative w-full max-w-4xl bg-white rounded-2xl shadow-2xl animate-modal-in overflow-hidden">
-
       <div class="h-1.5 w-full bg-gradient-to-r from-[#6A2C8A] via-[#8B1E7E] to-[#C43A7A]"></div>
 
       <div class="flex items-center justify-between px-6 py-4 border-b border-slate-100">
@@ -1663,8 +1589,7 @@ if ($conn instanceof mysqli) {
           <div class="space-y-2">
             <label for="create_name" class="block text-sm font-semibold text-slate-700">Name <span class="text-[#E5097F]">*</span></label>
             <input type="text" name="name" id="create_name" required placeholder="StudentName"
-                   class="w-full px-4 py-3 border-2 border-slate-200 rounded-xl bg-white text-slate-800 font-medium
-                          placeholder-slate-400
+                   class="w-full px-4 py-3 border-2 border-slate-200 rounded-xl bg-white text-slate-800 font-medium placeholder-slate-400
                           focus:outline-none focus:border-[#4A154B] focus:ring-4 focus:ring-[#4A154B]/10
                           hover:border-[#4A154B]/40 transition-all" />
           </div>
@@ -1672,8 +1597,7 @@ if ($conn instanceof mysqli) {
           <div class="space-y-2">
             <label for="create_academic_year" class="block text-sm font-semibold text-slate-700">Academic Year <span class="text-[#E5097F]">*</span></label>
             <input type="text" name="academic_year" id="create_academic_year" required placeholder="AcademicYear"
-                   class="w-full px-4 py-3 border-2 border-slate-200 rounded-xl bg-white text-slate-800 font-medium
-                          placeholder-slate-400
+                   class="w-full px-4 py-3 border-2 border-slate-200 rounded-xl bg-white text-slate-800 font-medium placeholder-slate-400
                           focus:outline-none focus:border-[#4A154B] focus:ring-4 focus:ring-[#4A154B]/10
                           hover:border-[#4A154B]/40 transition-all" />
           </div>
@@ -1683,8 +1607,7 @@ if ($conn instanceof mysqli) {
           <div class="space-y-2">
             <label for="create_complaint" class="block text-sm font-semibold text-slate-700">Complaint <span class="text-[#E5097F]">*</span></label>
             <textarea name="complaint" id="create_complaint" required rows="3" placeholder="Complaint"
-                      class="w-full px-4 py-3 border-2 border-slate-200 rounded-xl bg-white text-slate-800 font-medium
-                             placeholder-slate-400 resize-none
+                      class="w-full px-4 py-3 border-2 border-slate-200 rounded-xl bg-white text-slate-800 font-medium placeholder-slate-400 resize-none
                              focus:outline-none focus:border-[#4A154B] focus:ring-4 focus:ring-[#4A154B]/10
                              hover:border-[#4A154B]/40 transition-all"></textarea>
           </div>
@@ -1692,8 +1615,7 @@ if ($conn instanceof mysqli) {
           <div class="space-y-2">
             <label for="create_class_name" class="block text-sm font-semibold text-slate-700">Class Name</label>
             <input type="text" name="class_name" id="create_class_name" placeholder="ClassName"
-                   class="w-full px-4 py-3 border-2 border-slate-200 rounded-xl bg-white text-slate-800 font-medium
-                          placeholder-slate-400
+                   class="w-full px-4 py-3 border-2 border-slate-200 rounded-xl bg-white text-slate-800 font-medium placeholder-slate-400
                           focus:outline-none focus:border-[#4A154B] focus:ring-4 focus:ring-[#4A154B]/10
                           hover:border-[#4A154B]/40 transition-all" />
           </div>
@@ -1716,8 +1638,7 @@ if ($conn instanceof mysqli) {
           <div class="space-y-2">
             <label for="create_action_taken" class="block text-sm font-semibold text-slate-700">Action Taken <span class="text-[#E5097F]">*</span></label>
             <input type="text" name="action_taken" id="create_action_taken" required placeholder="ActionTaken"
-                   class="w-full px-4 py-3 border-2 border-slate-200 rounded-xl bg-white text-slate-800 font-medium
-                          placeholder-slate-400
+                   class="w-full px-4 py-3 border-2 border-slate-200 rounded-xl bg-white text-slate-800 font-medium placeholder-slate-400
                           focus:outline-none focus:border-[#4A154B] focus:ring-4 focus:ring-[#4A154B]/10
                           hover:border-[#4A154B]/40 transition-all" />
           </div>
@@ -1727,8 +1648,7 @@ if ($conn instanceof mysqli) {
             <input type="tel" name="cell_no" id="create_cell_no" required
                    inputmode="numeric" pattern="[0-9]{10}" minlength="10" maxlength="10"
                    title="Please enter exactly 10 digits" placeholder="CellNo"
-                   class="w-full px-4 py-3 border-2 border-slate-200 rounded-xl bg-white text-slate-800 font-medium
-                          placeholder-slate-400
+                   class="w-full px-4 py-3 border-2 border-slate-200 rounded-xl bg-white text-slate-800 font-medium placeholder-slate-400
                           focus:outline-none focus:border-[#4A154B] focus:ring-4 focus:ring-[#4A154B]/10
                           hover:border-[#4A154B]/40 transition-all" />
           </div>
@@ -1754,8 +1674,7 @@ if ($conn instanceof mysqli) {
           <div class="space-y-2 md:col-span-2">
             <label for="create_replied_by" class="block text-sm font-semibold text-slate-700">Replied By <span class="text-[#E5097F]">*</span></label>
             <input type="text" name="replied_by" id="create_replied_by" required placeholder="Replied"
-                   class="w-full px-4 py-3 border-2 border-slate-200 rounded-xl bg-white text-slate-800 font-medium
-                          placeholder-slate-400
+                   class="w-full px-4 py-3 border-2 border-slate-200 rounded-xl bg-white text-slate-800 font-medium placeholder-slate-400
                           focus:outline-none focus:border-[#4A154B] focus:ring-4 focus:ring-[#4A154B]/10
                           hover:border-[#4A154B]/40 transition-all" />
           </div>
@@ -1763,27 +1682,21 @@ if ($conn instanceof mysqli) {
 
         <div class="flex justify-center pt-3">
           <button type="submit"
-                  class="px-12 py-3 rounded-xl
-                         bg-gradient-to-r from-[#6A2C8A] via-[#8B1E7E] to-[#C43A7A]
-                         hover:from-[#5A1C7A] hover:via-[#7B0E6E] hover:to-[#B42A6A]
-                         text-white font-bold shadow-lg shadow-purple-500/30 hover:shadow-purple-500/50
-                         transition-all duration-300 hover:-translate-y-0.5 active:scale-95">
+                  class="px-12 py-3 rounded-xl bg-gradient-to-r from-[#6A2C8A] via-[#8B1E7E] to-[#C43A7A] hover:from-[#5A1C7A] hover:via-[#7B0E6E] hover:to-[#B42A6A] text-white font-bold shadow-lg shadow-purple-500/30 hover:shadow-purple-500/50 transition-all duration-300 hover:-translate-y-0.5 active:scale-95">
             Submit
           </button>
         </div>
       </form>
-
     </div>
   </div>
 
-  <!-- ============================================================
-       BULK UPLOAD MODAL
-       ============================================================ -->
+  <!-- ============================================================ -->
+  <!-- BULK UPLOAD MODAL -->
+  <!-- ============================================================ -->
   <div id="bulkUploadModal" class="hidden fixed inset-0 z-[60] flex items-center justify-center p-4">
     <div class="absolute inset-0 bg-black/40 backdrop-blur-sm" onclick="closeBulkUploadModal()"></div>
 
     <div class="relative w-full max-w-lg bg-white rounded-2xl shadow-2xl animate-modal-in overflow-hidden">
-
       <div class="h-1.5 w-full bg-gradient-to-r from-[#6A2C8A] via-[#8B1E7E] to-[#C43A7A]"></div>
 
       <div class="flex items-center justify-between px-6 py-4 border-b border-slate-100">
@@ -1810,9 +1723,7 @@ if ($conn instanceof mysqli) {
         </div>
 
         <div class="space-y-2">
-          <label for="csv_file" class="block text-sm font-semibold text-slate-700">
-            Select CSV File <span class="text-[#E5097F]">*</span>
-          </label>
+          <label for="csv_file" class="block text-sm font-semibold text-slate-700">Select CSV File <span class="text-[#E5097F]">*</span></label>
           <input type="file" name="csv_file" id="csv_file" required accept=".csv, .txt"
                  class="w-full text-sm text-slate-700
                         file:mr-3 file:py-2.5 file:px-4
@@ -1835,108 +1746,74 @@ if ($conn instanceof mysqli) {
             </div>
           </div>
           <a href="summary_details.php?download_template=1"
-             class="inline-flex items-center gap-2 px-4 py-2 rounded-xl
-                    bg-white hover:bg-purple-50
-                    border-2 border-purple-100 hover:border-[#8B1E7E]
-                    text-[#8B1E7E] font-semibold text-sm
-                    transition-all duration-200 hover:scale-105 active:scale-95 whitespace-nowrap">
-            <i data-lucide="download" class="w-4 h-4"></i>
-            <span>Sample Template</span>
+             class="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-white hover:bg-purple-50 border-2 border-purple-100 hover:border-[#8B1E7E] text-[#8B1E7E] font-semibold text-sm transition-all duration-200 hover:scale-105 active:scale-95 whitespace-nowrap">
+            <i data-lucide="download" class="w-4 h-4"></i> <span>Sample Template</span>
           </a>
         </div>
 
         <div class="flex justify-center pt-2 gap-3">
-          <button type="button"
-                  onclick="closeBulkUploadModal()"
-                  class="px-6 py-3 rounded-xl font-semibold text-slate-700
-                         bg-slate-100 hover:bg-slate-200 border border-slate-200
-                         transition-all duration-200 active:scale-95">
+          <button type="button" onclick="closeBulkUploadModal()"
+                  class="px-6 py-3 rounded-xl font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-200 transition-all duration-200 active:scale-95">
             Cancel
           </button>
           <button type="submit"
-                  class="px-8 py-3 rounded-xl
-                         bg-gradient-to-r from-[#6A2C8A] via-[#8B1E7E] to-[#C43A7A]
-                         hover:from-[#5A1C7A] hover:via-[#7B0E6E] hover:to-[#B42A6A]
-                         text-white font-bold shadow-lg shadow-purple-500/30 hover:shadow-purple-500/50
-                         transition-all duration-300 hover:-translate-y-0.5 active:scale-95
-                         flex items-center gap-2">
-            <i data-lucide="upload" class="w-4 h-4"></i>
-            <span>Import</span>
+                  class="px-8 py-3 rounded-xl bg-gradient-to-r from-[#6A2C8A] via-[#8B1E7E] to-[#C43A7A] hover:from-[#5A1C7A] hover:via-[#7B0E6E] hover:to-[#B42A6A] text-white font-bold shadow-lg shadow-purple-500/30 hover:shadow-purple-500/50 transition-all duration-300 hover:-translate-y-0.5 active:scale-95 flex items-center gap-2">
+            <i data-lucide="upload" class="w-4 h-4"></i> <span>Import</span>
           </button>
         </div>
       </form>
-
     </div>
   </div>
 
-  <!-- ============================================================= -->
-  <!-- CUSTOM LOGOUT CONFIRMATION MODAL                              -->
-  <!-- ============================================================= -->
-  <div id="logoutConfirmModal" class="hidden fixed inset-0 z-[70] flex items-center justify-center p-4 no-print">
+  <!-- ============================================================ -->
+  <!-- LOGOUT MODAL -->
+  <!-- ============================================================ -->
+  <div id="logoutConfirmModal" class="hidden fixed inset-0 z-[70] flex items-center justify-center p-4">
     <div class="absolute inset-0 bg-black/50 backdrop-blur-sm" onclick="closeLogoutModal()"></div>
 
-    <div id="logoutConfirmPanel"
-         class="relative w-full max-w-md bg-white rounded-2xl shadow-2xl animate-modal-in overflow-hidden">
-
+    <div id="logoutConfirmPanel" class="relative w-full max-w-md bg-white rounded-2xl shadow-2xl animate-modal-in overflow-hidden">
       <div class="h-1.5 w-full bg-gradient-to-r from-[#6A2C8A] via-[#8B1E7E] to-[#C43A7A]"></div>
 
       <div class="px-6 pt-6 pb-2 flex flex-col items-center text-center">
-        <div class="w-16 h-16 rounded-full flex items-center justify-center mb-4
-                    bg-gradient-to-br from-red-100 to-pink-100 ring-4 ring-red-50">
+        <div class="w-16 h-16 rounded-full flex items-center justify-center mb-4 bg-gradient-to-br from-red-100 to-pink-100 ring-4 ring-red-50">
           <i data-lucide="log-out" class="w-8 h-8 text-red-500"></i>
         </div>
 
         <h3 class="text-xl font-bold text-slate-800 mb-2">Log Out?</h3>
 
         <p class="text-sm text-slate-500 leading-relaxed">
-          You are about to log out of
-          <span class="font-bold text-[#8B1E7E] break-words"><?= e($displayName) ?></span>.
+          You are about to log out of <span class="font-bold text-[#8B1E7E] break-words"><?= e($displayName) ?></span>.
           Any unsaved changes will be lost.
         </p>
 
         <p class="text-xs text-slate-400 font-medium mt-3 flex items-center gap-1.5">
-          <i data-lucide="info" class="w-3.5 h-3.5"></i>
-          You can log back in anytime.
+          <i data-lucide="info" class="w-3.5 h-3.5"></i> You can log back in anytime.
         </p>
       </div>
 
       <div class="px-6 py-5 mt-2 flex flex-col-reverse sm:flex-row gap-3">
-        <button type="button"
-                onclick="closeLogoutModal()"
-                class="flex-1 px-5 py-3 rounded-xl font-semibold text-slate-700
-                       bg-slate-100 hover:bg-slate-200 border border-slate-200
-                       transition-all duration-200 active:scale-95">
+        <button type="button" onclick="closeLogoutModal()"
+                class="flex-1 px-5 py-3 rounded-xl font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-200 transition-all duration-200 active:scale-95">
           Cancel
         </button>
-
-        <button type="button"
-                id="confirmLogoutBtn"
-                class="flex-1 px-5 py-3 rounded-xl font-bold text-white
-                       bg-gradient-to-r from-red-500 via-red-600 to-rose-600
-                       hover:from-red-600 hover:via-red-700 hover:to-rose-700
-                       shadow-lg shadow-red-500/30 hover:shadow-red-500/50
-                       transition-all duration-300 hover:-translate-y-0.5 active:scale-95
-                       flex items-center justify-center gap-2">
-          <i data-lucide="log-out" class="w-4 h-4"></i>
-          <span>Log Out</span>
+        <button type="button" id="confirmLogoutBtn"
+                class="flex-1 px-5 py-3 rounded-xl font-bold text-white bg-gradient-to-r from-red-500 via-red-600 to-rose-600 hover:from-red-600 hover:via-red-700 hover:to-rose-700 shadow-lg shadow-red-500/30 hover:shadow-red-500/50 transition-all duration-300 hover:-translate-y-0.5 active:scale-95 flex items-center justify-center gap-2">
+          <i data-lucide="log-out" class="w-4 h-4"></i> <span>Log Out</span>
         </button>
       </div>
-
     </div>
   </div>
 
-  <!-- HIDDEN DELETE FORM -->
+  <!-- Hidden delete form -->
   <form id="deleteForm" method="POST" action="summary_details.php" class="hidden">
     <input type="hidden" name="action" value="delete_summary" />
     <input type="hidden" name="grievance_id" id="deleteGrievanceId" value="" />
   </form>
 
   <script>
-    if (typeof lucide !== 'undefined') {
-      lucide.createIcons();
-    }
+    if (typeof lucide !== 'undefined') lucide.createIcons();
 
-    // ---- Auto-dismiss flash messages after 3 seconds ----
+    // Auto-dismiss flash
     (function () {
       ['flashSuccessBox', 'flashErrorBox'].forEach(function (id) {
         const box = document.getElementById(id);
@@ -1949,62 +1826,53 @@ if ($conn instanceof mysqli) {
       });
     })();
 
-    // ---- Admin profile dropdown ----
+    // Admin dropdown
     (function () {
-      const btn       = document.getElementById('admin-dropdown-btn');
-      const menu      = document.getElementById('admin-dropdown-menu');
-      const chevron   = document.getElementById('admin-chevron');
+      const btn = document.getElementById('admin-dropdown-btn');
+      const menu = document.getElementById('admin-dropdown-menu');
+      const chevron = document.getElementById('admin-chevron');
       const container = document.getElementById('admin-dropdown-container');
-
       if (!btn || !menu || !container) return;
 
       btn.addEventListener('click', function (e) {
         e.stopPropagation();
         const isOpen = !menu.classList.contains('hidden');
         if (isOpen) {
-          menu.classList.add('hidden');
-          menu.classList.remove('animate-dropdown');
+          menu.classList.add('hidden'); menu.classList.remove('animate-dropdown');
           if (chevron) chevron.classList.remove('rotate-180');
-          btn.setAttribute('aria-expanded', 'false');
+          btn.setAttribute('aria-expanded','false');
         } else {
-          menu.classList.remove('hidden');
-          menu.classList.add('animate-dropdown');
+          menu.classList.remove('hidden'); menu.classList.add('animate-dropdown');
           if (chevron) chevron.classList.add('rotate-180');
-          btn.setAttribute('aria-expanded', 'true');
+          btn.setAttribute('aria-expanded','true');
         }
       });
 
       document.addEventListener('click', function (e) {
         if (!container.contains(e.target)) {
-          menu.classList.add('hidden');
-          menu.classList.remove('animate-dropdown');
+          menu.classList.add('hidden'); menu.classList.remove('animate-dropdown');
           if (chevron) chevron.classList.remove('rotate-180');
-          btn.setAttribute('aria-expanded', 'false');
+          btn.setAttribute('aria-expanded','false');
         }
       });
 
       document.addEventListener('keydown', function (e) {
         if (e.key === 'Escape') {
-          menu.classList.add('hidden');
-          menu.classList.remove('animate-dropdown');
+          menu.classList.add('hidden'); menu.classList.remove('animate-dropdown');
           if (chevron) chevron.classList.remove('rotate-180');
-          btn.setAttribute('aria-expanded', 'false');
+          btn.setAttribute('aria-expanded','false');
         }
       });
     })();
 
-    // ============================================================
-    // VIEW MODAL
-    // ============================================================
+    // Modals
     const viewModal = document.getElementById('viewModal');
 
     function openViewModal(data) {
       const setText = function (id, value) {
         const el = document.getElementById(id);
         if (!el) return;
-        el.textContent = (value !== undefined && value !== null && String(value).trim() !== '')
-          ? String(value)
-          : '—';
+        el.textContent = (value !== undefined && value !== null && String(value).trim() !== '') ? String(value) : '—';
       };
 
       setText('viewName',         data.name);
@@ -2038,44 +1906,33 @@ if ($conn instanceof mysqli) {
       document.body.classList.add('overflow-hidden');
       if (typeof lucide !== 'undefined') lucide.createIcons();
     }
-
     function closeViewModal() {
       viewModal.classList.add('hidden');
       document.body.classList.remove('overflow-hidden');
     }
 
-    // ============================================================
-    // EDIT MODAL
-    // ============================================================
     const editModal = document.getElementById('editModal');
-
     function openEditModal(data) {
-      document.getElementById('editGrievanceId').value   = data.id || '';
-      document.getElementById('editNumber').value        = data.number || '—';
-      document.getElementById('edit_subject').value      = data.subject || '';
-      document.getElementById('edit_description').value  = data.description || '';
-      document.getElementById('edit_status').value       = data.status || 'Pending';
-      document.getElementById('edit_reply_details').value= data.reply_details || '';
+      document.getElementById('editGrievanceId').value    = data.id || '';
+      document.getElementById('editNumber').value         = data.number || '—';
+      document.getElementById('edit_subject').value       = data.subject || '';
+      document.getElementById('edit_description').value   = data.description || '';
+      document.getElementById('edit_status').value        = data.status || 'Pending';
+      document.getElementById('edit_reply_details').value = data.reply_details || '';
 
       editModal.classList.remove('hidden');
       document.body.classList.add('overflow-hidden');
-
       setTimeout(function () {
-        const subjectInput = document.getElementById('edit_subject');
-        if (subjectInput) subjectInput.focus();
+        const s = document.getElementById('edit_subject');
+        if (s) s.focus();
       }, 80);
-
       if (typeof lucide !== 'undefined') lucide.createIcons();
     }
-
     function closeEditModal() {
       editModal.classList.add('hidden');
       document.body.classList.remove('overflow-hidden');
     }
 
-    // ============================================================
-    // DELETE MODAL
-    // ============================================================
     const deleteConfirmModal = document.getElementById('deleteConfirmModal');
     const deleteConfirmPanel = document.getElementById('deleteConfirmPanel');
     const deleteNameDisplay  = document.getElementById('deleteNameDisplay');
@@ -2084,33 +1941,22 @@ if ($conn instanceof mysqli) {
 
     function confirmDelete(grievanceId, label) {
       pendingDeleteId = grievanceId;
-
-      if (deleteNameDisplay) {
-        deleteNameDisplay.textContent = '"' + label + '"';
-      }
-
+      if (deleteNameDisplay) deleteNameDisplay.textContent = '"' + label + '"';
       deleteConfirmModal.classList.remove('hidden');
       document.body.classList.add('overflow-hidden');
-
       if (deleteConfirmPanel) {
         deleteConfirmPanel.classList.remove('animate-confirm-shake');
         void deleteConfirmPanel.offsetWidth;
         deleteConfirmPanel.classList.add('animate-confirm-shake');
       }
-
-      setTimeout(function () {
-        if (confirmDeleteBtn) confirmDeleteBtn.focus();
-      }, 80);
-
+      setTimeout(function () { if (confirmDeleteBtn) confirmDeleteBtn.focus(); }, 80);
       if (typeof lucide !== 'undefined') lucide.createIcons();
     }
-
     function closeDeleteModal() {
       deleteConfirmModal.classList.add('hidden');
       document.body.classList.remove('overflow-hidden');
       pendingDeleteId = null;
     }
-
     if (confirmDeleteBtn) {
       confirmDeleteBtn.addEventListener('click', function () {
         if (pendingDeleteId === null) return closeDeleteModal();
@@ -2123,81 +1969,60 @@ if ($conn instanceof mysqli) {
       });
     }
 
-    // ============================================================
-    // CREATE MODAL
-    // ============================================================
     const createModal = document.getElementById('createSummaryModal');
     const createForm  = document.getElementById('createSummaryForm');
-
     function openCreateModal() {
       createModal.classList.remove('hidden');
       document.body.classList.add('overflow-hidden');
       setTimeout(function () {
-        const roleSelect = document.getElementById('create_role');
-        if (roleSelect) roleSelect.focus();
+        const r = document.getElementById('create_role');
+        if (r) r.focus();
       }, 80);
       if (typeof lucide !== 'undefined') lucide.createIcons();
     }
-
     function closeCreateModal() {
       createModal.classList.add('hidden');
       document.body.classList.remove('overflow-hidden');
       if (createForm) createForm.reset();
     }
 
-    // ============================================================
-    // BULK UPLOAD MODAL
-    // ============================================================
     const bulkModal = document.getElementById('bulkUploadModal');
     const bulkForm  = document.getElementById('bulkUploadForm');
-
     function openBulkUploadModal() {
       bulkModal.classList.remove('hidden');
       document.body.classList.add('overflow-hidden');
       setTimeout(function () {
-        const fileInput = document.getElementById('csv_file');
-        if (fileInput) fileInput.focus();
+        const f = document.getElementById('csv_file');
+        if (f) f.focus();
       }, 80);
       if (typeof lucide !== 'undefined') lucide.createIcons();
     }
-
     function closeBulkUploadModal() {
       bulkModal.classList.add('hidden');
       document.body.classList.remove('overflow-hidden');
       if (bulkForm) bulkForm.reset();
     }
 
-    // ============================================================
-    // LOGOUT MODAL
-    // ============================================================
     const logoutConfirmModal = document.getElementById('logoutConfirmModal');
     const logoutConfirmPanel = document.getElementById('logoutConfirmPanel');
     const confirmLogoutBtn   = document.getElementById('confirmLogoutBtn');
-
     const LOGOUT_URL = '../logout.php?role=admin';
 
     function openLogoutModal() {
       logoutConfirmModal.classList.remove('hidden');
       document.body.classList.add('overflow-hidden');
-
       if (logoutConfirmPanel) {
         logoutConfirmPanel.classList.remove('animate-confirm-shake');
         void logoutConfirmPanel.offsetWidth;
         logoutConfirmPanel.classList.add('animate-confirm-shake');
       }
-
-      setTimeout(function () {
-        if (confirmLogoutBtn) confirmLogoutBtn.focus();
-      }, 80);
-
+      setTimeout(function () { if (confirmLogoutBtn) confirmLogoutBtn.focus(); }, 80);
       if (typeof lucide !== 'undefined') lucide.createIcons();
     }
-
     function closeLogoutModal() {
       logoutConfirmModal.classList.add('hidden');
       document.body.classList.remove('overflow-hidden');
     }
-
     (function () {
       const triggers = [
         document.getElementById('sidebarLogoutBtn'),
@@ -2206,13 +2031,11 @@ if ($conn instanceof mysqli) {
       triggers.forEach(function (btn) {
         if (!btn) return;
         btn.addEventListener('click', function (e) {
-          e.preventDefault();
-          e.stopPropagation();
+          e.preventDefault(); e.stopPropagation();
           openLogoutModal();
         });
       });
     })();
-
     if (confirmLogoutBtn) {
       confirmLogoutBtn.addEventListener('click', function () {
         confirmLogoutBtn.classList.add('opacity-50', 'pointer-events-none');
@@ -2220,16 +2043,12 @@ if ($conn instanceof mysqli) {
       });
     }
 
-    // ============================================================
-    // ENTRIES + SEARCH
-    // ============================================================
+    // Entries + search
     (function () {
       const entriesSelect = document.getElementById('entriesPerPage');
       const filterForm    = document.getElementById('filterForm');
       if (!entriesSelect || !filterForm) return;
-      entriesSelect.addEventListener('change', function () {
-        filterForm.submit();
-      });
+      entriesSelect.addEventListener('change', function () { filterForm.submit(); });
     })();
 
     (function () {
@@ -2243,7 +2062,6 @@ if ($conn instanceof mysqli) {
         tableBody.querySelectorAll('tr').forEach(function (row) {
           row.style.display = (term === '' || row.textContent.toLowerCase().indexOf(term) !== -1) ? '' : 'none';
         });
-
         clearTimeout(debounceTimer);
         debounceTimer = setTimeout(function () {
           const form = document.getElementById('filterForm');
@@ -2252,7 +2070,7 @@ if ($conn instanceof mysqli) {
       });
     })();
 
-    // ---- Mobile: enforce 10 digits ----
+    // Mobile: enforce 10 digits
     (function () {
       const cellInput = document.getElementById('create_cell_no');
       if (!cellInput) return;
@@ -2261,9 +2079,7 @@ if ($conn instanceof mysqli) {
       });
     })();
 
-    // ============================================================
-    // ESCAPE closes modals
-    // ============================================================
+    // Escape closes modals
     document.addEventListener('keydown', function (e) {
       if (e.key !== 'Escape') return;
       if (viewModal && !viewModal.classList.contains('hidden')) closeViewModal();

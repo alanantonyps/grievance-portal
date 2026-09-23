@@ -7,7 +7,7 @@
  * Flow:
  *   1. Parent enters the student's Admission Number and clicks "Check Student"
  *   2. AJAX fetches student + course + class details (embedded endpoint)
- *   3. Parent fills their own details, then submits
+ *   3. Parent fills their own details (including username), then submits
  *   4. User row → parents row (with relation) → link to student → commit
  *
  * Database (grievance_db):
@@ -26,7 +26,7 @@
 declare(strict_types=1);
 
 // ---------------------------------------------------------------------------
-// 1. SESSION START
+// SESSION START
 // ---------------------------------------------------------------------------
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
@@ -37,7 +37,7 @@ ini_set('display_startup_errors', '0');
 error_reporting(E_ALL);
 
 // ---------------------------------------------------------------------------
-// 2. If already logged in as PARENT, redirect to dashboard
+// If already logged in as PARENT, redirect to dashboard
 // ---------------------------------------------------------------------------
 if (!empty($_SESSION['user_id']) && isset($_SESSION['role']) && strtoupper((string) $_SESSION['role']) === 'PARENT') {
     header('Location: parent/dashboard.php');
@@ -45,7 +45,7 @@ if (!empty($_SESSION['user_id']) && isset($_SESSION['role']) && strtoupper((stri
 }
 
 // ---------------------------------------------------------------------------
-// 3. DATABASE CONNECTION
+// DATABASE CONNECTION
 // ---------------------------------------------------------------------------
 $dbFile = __DIR__ . '/db_connect.php';
 
@@ -74,7 +74,7 @@ if (!file_exists($dbFile)) {
 }
 
 // ---------------------------------------------------------------------------
-// 4. HELPERS
+// HELPERS
 // ---------------------------------------------------------------------------
 function e(?string $v): string
 {
@@ -89,7 +89,7 @@ function jsonResponse(array $payload): void
 }
 
 // ---------------------------------------------------------------------------
-// 5. CSRF TOKEN
+// CSRF TOKEN
 // ---------------------------------------------------------------------------
 if (empty($_SESSION['csrf_token'])) {
     try {
@@ -101,12 +101,12 @@ if (empty($_SESSION['csrf_token'])) {
 $csrfToken = (string) $_SESSION['csrf_token'];
 
 // ---------------------------------------------------------------------------
-// 6. ALLOWED RELATIONS (whitelist)
+// ALLOWED RELATIONS (whitelist)
 // ---------------------------------------------------------------------------
 $allowedRelations = ['Father', 'Mother', 'Guardian'];
 
 // ---------------------------------------------------------------------------
-// 7. EMBEDDED AJAX ENDPOINT — ?action=check_student
+// EMBEDDED AJAX ENDPOINT — ?action=check_student
 // ---------------------------------------------------------------------------
 if (($_GET['action'] ?? '') === 'check_student') {
 
@@ -185,7 +185,7 @@ if (($_GET['action'] ?? '') === 'check_student') {
 }
 
 // ---------------------------------------------------------------------------
-// 8. HANDLE FORM SUBMISSION (POST)
+// HANDLE FORM SUBMISSION (POST)
 // ---------------------------------------------------------------------------
 $formErrors  = [];
 $formSuccess = '';
@@ -196,6 +196,7 @@ $formData    = [
     'course'           => '',
     'class'            => '',
     'name'             => '',
+    'username'         => '',
     'email'            => '',
     'contact_number'   => '',
     'relation'         => '',
@@ -213,6 +214,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'regis
     $admissionNumber = trim((string) ($_POST['admission_number'] ?? ''));
     $studentId       = (int) ($_POST['student_id']       ?? 0);
     $name            = trim((string) ($_POST['name']             ?? ''));
+    $username        = trim((string) ($_POST['username']         ?? ''));
     $email           = trim((string) ($_POST['email']            ?? ''));
     $contactNumber   = trim((string) ($_POST['contact_number']   ?? ''));
     $relation        = trim((string) ($_POST['relation']         ?? ''));
@@ -222,6 +224,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'regis
     $formData['admission_number'] = $admissionNumber;
     $formData['student_id']       = $studentId;
     $formData['name']             = $name;
+    $formData['username']         = $username;
     $formData['email']            = $email;
     $formData['contact_number']   = $contactNumber;
     $formData['relation']         = $relation;
@@ -235,6 +238,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'regis
     }
     if ($name === '') {
         $formErrors[] = 'Parent name is required.';
+    }
+    if ($username === '') {
+        $formErrors[] = 'Username is required.';
+    } elseif (!preg_match('/^[A-Za-z0-9_.]{3,50}$/', $username)) {
+        $formErrors[] = 'Username must be 3–50 characters and contain only letters, digits, underscore, or dot.';
     }
     if ($email === '') {
         $formErrors[] = 'Email is required.';
@@ -285,17 +293,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'regis
         }
     }
 
-    // ----- Duplicate checks on email/username -----
+    // ----- Duplicate checks on username / email -----
     if (empty($formErrors) && $conn !== null) {
         try {
+            // Username uniqueness in users table
             $chkDup = $conn->prepare("SELECT id FROM users WHERE username = ? LIMIT 1");
-            $chkDup->bind_param('s', $email);
+            $chkDup->bind_param('s', $username);
             $chkDup->execute();
             if ($chkDup->get_result()->num_rows > 0) {
-                $formErrors[] = 'An account with this email already exists. Please use another email.';
+                $formErrors[] = 'This username is already taken. Please choose a different one.';
             }
             $chkDup->close();
 
+            // Email uniqueness in parents table
             if (empty($formErrors)) {
                 $chkDup2 = $conn->prepare("SELECT id FROM parents WHERE email = ? LIMIT 1");
                 $chkDup2->bind_param('s', $email);
@@ -315,7 +325,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'regis
         $conn->begin_transaction();
 
         try {
-            // ---- 1) users ----
+            // ---- 1) users (username = parent-chosen username) ----
             $hashedPassword = password_hash($password, PASSWORD_BCRYPT);
             $role           = 'PARENT';
             $status         = 'Pending';
@@ -327,7 +337,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'regis
                 throw new Exception('User insert prepare failed: ' . $conn->error);
             }
 
-            $stmtUser->bind_param('ssss', $email, $hashedPassword, $role, $status);
+            $stmtUser->bind_param('ssss', $username, $hashedPassword, $role, $status);
             if (!$stmtUser->execute()) {
                 throw new Exception('User insert failed: ' . $stmtUser->error);
             }
@@ -535,7 +545,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'regis
 
           </div>
 
-          <!-- Row 3: Name | Email -->
+          <!-- Row 3: Name | Username -->
           <div class="grid grid-cols-1 md:grid-cols-2 gap-5 md:gap-8">
 
             <div class="space-y-2">
@@ -552,6 +562,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'regis
             </div>
 
             <div class="space-y-2">
+              <label for="username" class="block text-sm font-semibold text-slate-700">
+                Username <span class="text-red-500">*</span>
+              </label>
+              <input type="text" name="username" id="username" required
+                     minlength="3" maxlength="50"
+                     pattern="[A-Za-z0-9_.]{3,50}"
+                     autocomplete="username"
+                     value="<?= e($formData['username']) ?>"
+                     placeholder="Username"
+                     class="w-full px-4 py-3 border-2 border-slate-200 rounded-lg bg-white text-slate-800 font-medium
+                            placeholder-slate-400 text-sm
+                            focus:outline-none focus:border-[#8B1E7E] focus:ring-4 focus:ring-[#8B1E7E]/10
+                            hover:border-[#8B1E7E]/40 transition-all" />
+              <p class="text-xs text-slate-500">
+                Used to sign in. 3–50 chars, letters / digits / underscore / dot only.
+              </p>
+            </div>
+
+          </div>
+
+          <!-- Row 4: Email | Contact Number -->
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-5 md:gap-8">
+
+            <div class="space-y-2">
               <label for="email" class="block text-sm font-semibold text-slate-700">
                 Email <span class="text-red-500">*</span>
               </label>
@@ -562,15 +596,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'regis
                             placeholder-slate-400 text-sm
                             focus:outline-none focus:border-[#8B1E7E] focus:ring-4 focus:ring-[#8B1E7E]/10
                             hover:border-[#8B1E7E]/40 transition-all" />
-              <p class="text-xs text-red-500 font-semibold">
-                Email address will be used as username
-              </p>
             </div>
-
-          </div>
-
-          <!-- Row 4: Contact Number | Relation (dropdown) -->
-          <div class="grid grid-cols-1 md:grid-cols-2 gap-5 md:gap-8">
 
             <div class="space-y-2">
               <label for="contact_number" class="block text-sm font-semibold text-slate-700">
@@ -585,6 +611,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'regis
                             focus:outline-none focus:border-[#8B1E7E] focus:ring-4 focus:ring-[#8B1E7E]/10
                             hover:border-[#8B1E7E]/40 transition-all" />
             </div>
+
+          </div>
+
+          <!-- Row 5: Relation | Password -->
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-5 md:gap-8">
 
             <div class="space-y-2">
               <label for="relation" class="block text-sm font-semibold text-slate-700">
@@ -602,11 +633,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'regis
               </select>
             </div>
 
-          </div>
-
-          <!-- Row 5: Password -->
-          <div class="grid grid-cols-1 md:grid-cols-2 gap-5 md:gap-8">
-
             <div class="space-y-2">
               <label for="password" class="block text-sm font-semibold text-slate-700">
                 Password <span class="text-red-500">*</span>
@@ -614,6 +640,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'regis
               <div class="relative">
                 <input type="password" name="password" id="password" required
                        minlength="6"
+                       autocomplete="new-password"
                        placeholder="Password"
                        class="w-full px-4 py-3 pr-12 border-2 border-slate-200 rounded-lg bg-white text-slate-800 font-medium
                               placeholder-slate-400 text-sm
@@ -628,8 +655,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'regis
               </div>
               <p class="text-xs text-slate-500">Minimum 6 characters.</p>
             </div>
-
-            <div class="hidden md:block"></div>
 
           </div>
 
@@ -837,6 +862,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'regis
       if (!mobile) return;
       mobile.addEventListener('input', function () {
         this.value = this.value.replace(/\D/g, '').slice(0, 10);
+      });
+    })();
+
+    // ============================================================
+    // Username: block spaces/special chars as you type
+    // ============================================================
+    (function () {
+      const uname = document.getElementById('username');
+      if (!uname) return;
+      uname.addEventListener('input', function () {
+        this.value = this.value.replace(/[^A-Za-z0-9_.]/g, '');
       });
     })();
   </script>

@@ -6,10 +6,10 @@
  * Rajagiri College Grievance Redressal Portal
  *
  * Flow:
- *   1. Fetch active classes for the Class/Semester dropdown
- *   2. Validate required fields + duplicate email/admission check
- *   3. Insert into users (role = STUDENT, status = Pending)
- *   4. Insert into students (linked via user_id)
+ *   1. Fetch active classes (with course) for the Class/Semester dropdown
+ *   2. Validate required fields + duplicate username/email/admission check
+ *   3. Insert into users (username = student-provided username, role = STUDENT, status = Pending)
+ *   4. Insert into students (linked via user_id) — course is derived via classes.course_id
  *   5. Redirect to login.php?role=student&registered=success
  * ---------------------------------------------------------------------------
  */
@@ -17,7 +17,7 @@
 declare(strict_types=1);
 
 // ---------------------------------------------------------------------------
-// 1. SESSION
+// SESSION
 // ---------------------------------------------------------------------------
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
@@ -28,7 +28,7 @@ ini_set('display_startup_errors', '0');
 error_reporting(E_ALL);
 
 // ---------------------------------------------------------------------------
-// 2. DATABASE CONNECTION
+// DATABASE CONNECTION
 // ---------------------------------------------------------------------------
 $dbError = null;
 $conn    = null;
@@ -58,7 +58,7 @@ if (!file_exists($dbFile)) {
 }
 
 // ---------------------------------------------------------------------------
-// 3. HELPERS
+// HELPERS
 // ---------------------------------------------------------------------------
 function e(?string $v): string
 {
@@ -66,7 +66,7 @@ function e(?string $v): string
 }
 
 // ---------------------------------------------------------------------------
-// 4. CSRF TOKEN
+// CSRF TOKEN
 // ---------------------------------------------------------------------------
 if (empty($_SESSION['csrf_token'])) {
     try {
@@ -78,13 +78,22 @@ if (empty($_SESSION['csrf_token'])) {
 $csrfToken = (string) $_SESSION['csrf_token'];
 
 // ---------------------------------------------------------------------------
-// 5. FETCH ACTIVE CLASSES (for dropdown)
+// FETCH ACTIVE CLASSES (joined with course so the dropdown is unambiguous)
 // ---------------------------------------------------------------------------
 $classOptions = [];
 
 if ($conn instanceof mysqli) {
     try {
-        $res = $conn->query("SELECT id, class_name FROM classes WHERE status = 'Active' ORDER BY class_name ASC");
+        $sql = "SELECT  c.id           AS id,
+                        c.class_name   AS class_name,
+                        c.course_id    AS course_id,
+                        co.course_name AS course_name
+                FROM classes c
+                LEFT JOIN courses co ON co.id = c.course_id
+                WHERE c.status = 'Active'
+                ORDER BY co.course_name ASC, c.class_name ASC";
+
+        $res = $conn->query($sql);
         if ($res) {
             while ($row = $res->fetch_assoc()) {
                 $classOptions[] = $row;
@@ -96,13 +105,14 @@ if ($conn instanceof mysqli) {
 }
 
 // ---------------------------------------------------------------------------
-// 6. HANDLE FORM SUBMISSION
+// HANDLE FORM SUBMISSION
 // ---------------------------------------------------------------------------
 $errors  = [];
 $success = false;
 
 $formData = [
     'name'             => '',
+    'username'         => '',
     'gender'           => '',
     'admission_number' => '',
     'class_id'         => '',
@@ -123,6 +133,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     // ---- Collect input ----
     $formData['name']             = trim((string) ($_POST['name']             ?? ''));
+    $formData['username']         = trim((string) ($_POST['username']         ?? ''));
     $formData['gender']           = trim((string) ($_POST['gender']           ?? ''));
     $formData['admission_number'] = trim((string) ($_POST['admission_number'] ?? ''));
     $formData['class_id']         = trim((string) ($_POST['class_id']         ?? ''));
@@ -135,6 +146,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     // ---- Validation ----
     if ($formData['name'] === '') {
         $errors[] = 'Student Name is required.';
+    }
+    if ($formData['username'] === '') {
+        $errors[] = 'Username is required.';
+    } elseif (!preg_match('/^[A-Za-z0-9_.]{3,50}$/', $formData['username'])) {
+        $errors[] = 'Username must be 3–50 characters and contain only letters, digits, underscore, or dot.';
     }
     if (!in_array($formData['gender'], ['Male', 'Female', 'Other'], true)) {
         $errors[] = 'Please select a valid Gender.';
@@ -167,13 +183,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     // ---- Duplicate checks ----
     if (empty($errors) && $conn instanceof mysqli) {
         try {
-            // Email as username — check users table
+            // Username uniqueness — check users table
             $chk = $conn->prepare("SELECT id FROM users WHERE username = ? LIMIT 1");
             if ($chk) {
-                $chk->bind_param('s', $formData['email']);
+                $chk->bind_param('s', $formData['username']);
                 $chk->execute();
                 if ($chk->get_result()->num_rows > 0) {
-                    $errors[] = 'This email is already registered. Please log in or use a different email.';
+                    $errors[] = 'This username is already taken. Please choose a different one.';
                 }
                 $chk->close();
             }
@@ -224,7 +240,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $chkClass->close();
             }
 
-            // 1. Insert into users
+            // 1. Insert into users — username = student-provided username
             $hash = password_hash($formData['password'], PASSWORD_BCRYPT);
             $role = 'STUDENT';
 
@@ -232,12 +248,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if (!$stmtU) {
                 throw new Exception('Failed to prepare user insert.');
             }
-            $stmtU->bind_param('sss', $formData['email'], $hash, $role);
+            $stmtU->bind_param('sss', $formData['username'], $hash, $role);
             $stmtU->execute();
             $newUserId = (int) $conn->insert_id;
             $stmtU->close();
 
-            // 2. Insert into students
+            // 2. Insert into students (course is implied via class_id → classes.course_id)
             $stmtS = $conn->prepare("INSERT INTO students
                                         (user_id, class_id, name, admission_number, email, contact_number, guardian_name, address)
                                      VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
@@ -352,7 +368,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         <form method="POST" action="student_register.php" class="space-y-6" novalidate>
           <input type="hidden" name="csrf_token" value="<?= e($csrfToken) ?>" />
 
-          <!-- Row 1: Student Name + Gender -->
+          <!-- Row 1: Student Name + Username -->
           <div class="grid grid-cols-1 md:grid-cols-2 gap-5 md:gap-8">
 
             <div class="space-y-2">
@@ -367,6 +383,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             focus:outline-none focus:border-[#8B1E7E] focus:ring-4 focus:ring-[#8B1E7E]/10
                             hover:border-[#8B1E7E]/40 transition-all" />
             </div>
+
+            <div class="space-y-2">
+              <label for="username" class="block text-sm font-semibold text-slate-700">
+                Username <span class="text-red-500">*</span>
+              </label>
+              <input type="text" name="username" id="username" required
+                     minlength="3" maxlength="50"
+                     pattern="[A-Za-z0-9_.]{3,50}"
+                     autocomplete="username"
+                     value="<?= e($formData['username']) ?>"
+                     placeholder="Username"
+                     class="w-full px-4 py-3 border-2 border-slate-200 rounded-lg bg-white text-slate-800 font-medium
+                            placeholder-slate-400 text-sm
+                            focus:outline-none focus:border-[#8B1E7E] focus:ring-4 focus:ring-[#8B1E7E]/10
+                            hover:border-[#8B1E7E]/40 transition-all" />
+              <p class="text-xs text-slate-500">
+                Used to sign in. 3–50 chars, letters / digits / underscore / dot only.
+              </p>
+            </div>
+
+          </div>
+
+          <!-- Row 2: Gender + Admission Number -->
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-5 md:gap-8">
 
             <div class="space-y-2">
               <label for="gender" class="block text-sm font-semibold text-slate-700">
@@ -384,11 +424,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
               </select>
             </div>
 
-          </div>
-
-          <!-- Row 2: Admission Number + Class/Semester -->
-          <div class="grid grid-cols-1 md:grid-cols-2 gap-5 md:gap-8">
-
             <div class="space-y-2">
               <label for="admission_number" class="block text-sm font-semibold text-slate-700">
                 Admission Number <span class="text-red-500">*</span>
@@ -402,6 +437,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             hover:border-[#8B1E7E]/40 transition-all" />
             </div>
 
+          </div>
+
+          <!-- Row 3: Class/Semester + Email -->
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-5 md:gap-8">
+
             <div class="space-y-2">
               <label for="class_id" class="block text-sm font-semibold text-slate-700">
                 Class/Semester <span class="text-red-500">*</span>
@@ -413,17 +453,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                              hover:border-[#8B1E7E]/40 transition-all">
                 <option value="">SELECT</option>
                 <?php foreach ($classOptions as $opt): ?>
+                  <?php
+                    $courseName = trim((string) ($opt['course_name'] ?? ''));
+                    $className  = trim((string) ($opt['class_name']  ?? ''));
+                    $label      = ($courseName !== '') ? ($courseName . ' — ' . $className) : $className;
+                  ?>
                   <option value="<?= (int) $opt['id'] ?>" <?= (string) $formData['class_id'] === (string) $opt['id'] ? 'selected' : '' ?>>
-                    <?= e($opt['class_name']) ?>
+                    <?= e($label) ?>
                   </option>
                 <?php endforeach; ?>
               </select>
+              <p class="text-xs text-slate-500">
+                Format: <span class="font-medium">Course — Semester</span>
+              </p>
             </div>
-
-          </div>
-
-          <!-- Row 3: Email + Contact Number -->
-          <div class="grid grid-cols-1 md:grid-cols-2 gap-5 md:gap-8">
 
             <div class="space-y-2">
               <label for="email" class="block text-sm font-semibold text-slate-700">
@@ -436,10 +479,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             placeholder-slate-400 text-sm
                             focus:outline-none focus:border-[#8B1E7E] focus:ring-4 focus:ring-[#8B1E7E]/10
                             hover:border-[#8B1E7E]/40 transition-all" />
-              <p class="text-xs text-red-500 font-semibold">
-                Email address will be used as username
-              </p>
             </div>
+
+          </div>
+
+          <!-- Row 4: Contact Number + Guardian Name -->
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-5 md:gap-8">
 
             <div class="space-y-2">
               <label for="contact_number" class="block text-sm font-semibold text-slate-700">
@@ -455,11 +500,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             hover:border-[#8B1E7E]/40 transition-all" />
             </div>
 
-          </div>
-
-          <!-- Row 4: Guardian Name + Password -->
-          <div class="grid grid-cols-1 md:grid-cols-2 gap-5 md:gap-8">
-
             <div class="space-y-2">
               <label for="guardian_name" class="block text-sm font-semibold text-slate-700">
                 Guardian Name <span class="text-red-500">*</span>
@@ -473,6 +513,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             hover:border-[#8B1E7E]/40 transition-all" />
             </div>
 
+          </div>
+
+          <!-- Row 5: Password + (empty right) -->
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-5 md:gap-8">
+
             <div class="space-y-2">
               <label for="password" class="block text-sm font-semibold text-slate-700">
                 Password <span class="text-red-500">*</span>
@@ -480,6 +525,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
               <div class="relative">
                 <input type="password" name="password" id="password" required
                        minlength="6"
+                       autocomplete="new-password"
                        placeholder="Password"
                        class="w-full px-4 py-3 pr-12 border-2 border-slate-200 rounded-lg bg-white text-slate-800 font-medium
                               placeholder-slate-400 text-sm
@@ -494,9 +540,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
               </div>
             </div>
 
+            <div class="hidden md:block"></div>
+
           </div>
 
-          <!-- Row 5: Address -->
+          <!-- Row 6: Address -->
           <div class="grid grid-cols-1 md:grid-cols-2 gap-5 md:gap-8">
 
             <div class="space-y-2">
@@ -511,7 +559,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                hover:border-[#8B1E7E]/40 transition-all"><?= e($formData['address']) ?></textarea>
             </div>
 
-            <!-- Right column intentionally left empty per screenshot layout -->
             <div class="hidden md:block"></div>
 
           </div>
@@ -572,6 +619,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       if (!mobile) return;
       mobile.addEventListener('input', function () {
         this.value = this.value.replace(/\D/g, '').slice(0, 10);
+      });
+    })();
+
+    // ---- Username: block spaces/special chars as you type ----
+    (function () {
+      const uname = document.getElementById('username');
+      if (!uname) return;
+      uname.addEventListener('input', function () {
+        this.value = this.value.replace(/[^A-Za-z0-9_.]/g, '');
       });
     })();
   </script>

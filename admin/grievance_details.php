@@ -7,11 +7,10 @@
  *
  * Features:
  *   • Lists all grievances with joins across users / grievance_types / role tables
- *   • Live search + entries-per-page dropdown
- *   • Server-side pagination (Previous / Next)
+ *   • Live search + entries-per-page dropdown (server-side pagination)
  *   • Dynamic status badge colours
- *   • Eye icon  → opens full "View Grievance" modal (in-page)
- *   • List icon → opens "Action Summary" modal (Date + Attendee)
+ *   • Eye icon  → opens View modal (with attachments + reply attachment)
+ *   • List icon → opens Action Summary modal (pulls from grievance_actions)
  *   • Custom themed logout confirmation modal
  *   • Flash messages auto-dismiss after 3 seconds
  * ---------------------------------------------------------------------------
@@ -19,9 +18,6 @@
 
 declare(strict_types=1);
 
-// ---------------------------------------------------------------------------
-// 1. SESSION START
-// ---------------------------------------------------------------------------
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
@@ -31,7 +27,7 @@ ini_set('display_startup_errors', '0');
 error_reporting(E_ALL);
 
 // ---------------------------------------------------------------------------
-// 2. AUTH GUARD
+// AUTH GUARD
 // ---------------------------------------------------------------------------
 $sessionRole = isset($_SESSION['role']) ? strtoupper((string) $_SESSION['role']) : '';
 
@@ -43,10 +39,9 @@ if (empty($_SESSION['user_id']) || ($sessionRole !== 'ADMIN' && $sessionRole !==
 $userId = (int) $_SESSION['user_id'];
 
 // ---------------------------------------------------------------------------
-// 3. DATABASE CONNECTION
+// DATABASE CONNECTION
 // ---------------------------------------------------------------------------
 $dbFile = __DIR__ . '/../db_connect.php';
-
 $dbError = null;
 $conn    = null;
 
@@ -72,7 +67,7 @@ if (!file_exists($dbFile)) {
 }
 
 // ---------------------------------------------------------------------------
-// 4. HELPERS
+// HELPERS
 // ---------------------------------------------------------------------------
 function e(?string $v): string
 {
@@ -80,7 +75,7 @@ function e(?string $v): string
 }
 
 // ---------------------------------------------------------------------------
-// 5. FETCH ADMIN PROFILE
+// FETCH ADMIN PROFILE
 // ---------------------------------------------------------------------------
 $adminData = [
     'username'        => $_SESSION['username'] ?? 'Admin',
@@ -91,10 +86,7 @@ $adminData = [
 
 if ($conn instanceof mysqli) {
     try {
-        $sql = "SELECT  u.username,
-                        ap.name,
-                        ap.email,
-                        ap.profile_picture
+        $sql = "SELECT  u.username, ap.name, ap.email, ap.profile_picture
                 FROM users u
                 LEFT JOIN admin_profiles ap ON ap.user_id = u.id
                 WHERE u.id = ?
@@ -134,7 +126,7 @@ if (!empty($adminData['profile_picture'])) {
 }
 
 // ---------------------------------------------------------------------------
-// 6. FLASH MESSAGES
+// FLASH
 // ---------------------------------------------------------------------------
 $flashSuccess = '';
 $flashError   = '';
@@ -149,22 +141,18 @@ if (!empty($_SESSION['flash_error'])) {
 }
 
 // ---------------------------------------------------------------------------
-// 7. QUERY PARAMS — search, pagination, per-page
+// QUERY PARAMS
 // ---------------------------------------------------------------------------
 $search  = trim((string) ($_GET['q']       ?? ''));
 $entries = (int) ($_GET['entries']          ?? 10);
 $page    = (int) ($_GET['page']             ?? 1);
 
-if (!in_array($entries, [10, 25, 50, 100], true)) {
-    $entries = 10;
-}
+if (!in_array($entries, [10, 25, 50, 100], true)) $entries = 10;
 if ($page < 1) $page = 1;
-
 $offset = ($page - 1) * $entries;
 
 // ---------------------------------------------------------------------------
-// 8. FETCH GRIEVANCES (with joins & complainant name resolution)
-//    Includes full detail columns needed by the View modal.
+// FETCH GRIEVANCES
 // ---------------------------------------------------------------------------
 $grievances = [];
 $totalRows  = 0;
@@ -172,7 +160,6 @@ $totalPages = 1;
 
 if ($conn instanceof mysqli) {
     try {
-        // ---- Base WHERE clause with search support ----
         $whereSql = " WHERE 1=1";
         $params   = [];
         $types    = '';
@@ -192,7 +179,7 @@ if ($conn instanceof mysqli) {
             $types   .= 'ssss';
         }
 
-        // ---- Count query ----
+        // Count
         $countSql = "SELECT COUNT(*) AS c
                      FROM grievances g
                      LEFT JOIN grievance_types gt ON g.grievance_type_id   = gt.id
@@ -205,9 +192,7 @@ if ($conn instanceof mysqli) {
 
         $stmt = $conn->prepare($countSql);
         if ($stmt) {
-            if (!empty($params)) {
-                $stmt->bind_param($types, ...$params);
-            }
+            if (!empty($params)) $stmt->bind_param($types, ...$params);
             $stmt->execute();
             $res       = $stmt->get_result();
             $totalRows = (int) ($res ? ($res->fetch_assoc()['c'] ?? 0) : 0);
@@ -215,19 +200,20 @@ if ($conn instanceof mysqli) {
         }
 
         $totalPages = max(1, (int) ceil($totalRows / $entries));
-
         if ($page > $totalPages) {
-            $page = $totalPages;
+            $page   = $totalPages;
             $offset = ($page - 1) * $entries;
         }
 
-        // ---- Data query (with all details for View modal) ----
+        // Data query with attachments
         $dataSql = "SELECT  g.id,
                             g.grievance_number,
                             g.subject,
                             g.description,
                             g.status,
+                            g.attachment_path,
                             g.reply_details,
+                            g.reply_attachment_path,
                             g.feedback_details,
                             g.created_at,
                             g.updated_at,
@@ -270,7 +256,51 @@ if ($conn instanceof mysqli) {
 }
 
 // ---------------------------------------------------------------------------
-// 9. HELPER — STATUS BADGE CLASSES
+// FETCH ACTION SUMMARIES for the current page's grievances
+// ---------------------------------------------------------------------------
+$actionsByGrievance = [];
+
+if ($conn instanceof mysqli && !empty($grievances)) {
+    try {
+        $ids = array_map(function ($g) { return (int) $g['id']; }, $grievances);
+        $ids = array_values(array_unique(array_filter($ids)));
+
+        if (!empty($ids)) {
+            $placeholders = implode(',', array_fill(0, count($ids), '?'));
+
+            $sql = "SELECT  ga.id, ga.grievance_id, ga.action_date, ga.attendee_id,
+                            ga.summary, ga.action_taken, ga.created_by, ga.created_at,
+                            cm.name AS attendee_name,
+                            d.designation_name AS attendee_designation,
+                            u.username AS created_by_username
+                    FROM grievance_actions ga
+                    LEFT JOIN cell_members cm ON cm.id = ga.attendee_id
+                    LEFT JOIN designations d  ON d.id  = cm.designation_id
+                    LEFT JOIN users u         ON u.id  = ga.created_by
+                    WHERE ga.grievance_id IN ($placeholders)
+                    ORDER BY ga.action_date ASC, ga.id ASC";
+
+            $stmt = $conn->prepare($sql);
+            if ($stmt) {
+                $types = str_repeat('i', count($ids));
+                $stmt->bind_param($types, ...$ids);
+                $stmt->execute();
+                $res = $stmt->get_result();
+                while ($r = $res->fetch_assoc()) {
+                    $gid = (int) $r['grievance_id'];
+                    if (!isset($actionsByGrievance[$gid])) $actionsByGrievance[$gid] = [];
+                    $actionsByGrievance[$gid][] = $r;
+                }
+                $stmt->close();
+            }
+        }
+    } catch (Throwable $ex) {
+        error_log('[Action Summary Fetch] ' . $ex->getMessage());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// STATUS BADGE CLASSES
 // ---------------------------------------------------------------------------
 function statusBadgeClass(string $status): string
 {
@@ -332,6 +362,10 @@ function statusBadgeClass(string $status): string
             flashOut: {
               '0%':   { opacity: '1', transform: 'translateY(0)', maxHeight: '200px' },
               '100%': { opacity: '0', transform: 'translateY(-10px)', maxHeight: '0px' }
+            },
+            lightboxIn: {
+              '0%':   { opacity: '0' },
+              '100%': { opacity: '1' }
             }
           },
           animation: {
@@ -340,7 +374,8 @@ function statusBadgeClass(string $status): string
             'modal-in':   'modalFadeIn 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards',
             'confirm-shake': 'confirmShake 0.5s cubic-bezier(0.16, 1, 0.3, 1)',
             'flash-in':   'flashIn 0.35s cubic-bezier(0.16, 1, 0.3, 1) forwards',
-            'flash-out':  'flashOut 0.45s cubic-bezier(0.4, 0, 1, 1) forwards'
+            'flash-out':  'flashOut 0.45s cubic-bezier(0.4, 0, 1, 1) forwards',
+            'lightbox-in':'lightboxIn 0.25s ease-out forwards'
           }
         }
       }
@@ -356,53 +391,32 @@ function statusBadgeClass(string $status): string
 
     <!-- SIDEBAR -->
     <aside class="w-20 bg-gradient-to-b from-[#4A154B] via-[#5A1B5C] to-[#006837] flex flex-col items-center py-4 shadow-2xl fixed inset-y-0 left-0 z-40">
-
       <button class="text-white/80 hover:text-white mb-8 p-2 rounded-lg hover:bg-white/10 transition-colors" aria-label="Toggle sidebar">
         <i data-lucide="menu" class="w-6 h-6"></i>
       </button>
 
       <nav class="flex flex-col items-center space-y-6 flex-1">
-
-        <a href="dashboard.php"
-           class="group relative w-12 h-12 rounded-xl bg-white/10 hover:bg-white/20 flex items-center justify-center text-white transition-all hover:scale-110"
-           title="Dashboard">
+        <a href="dashboard.php" class="group relative w-12 h-12 rounded-xl bg-white/10 hover:bg-white/20 flex items-center justify-center text-white transition-all hover:scale-110" title="Dashboard">
           <i data-lucide="home" class="w-6 h-6"></i>
-          <span class="absolute left-full ml-3 hidden group-hover:block whitespace-nowrap bg-[#4A154B] text-white text-xs px-3 py-1.5 rounded-lg shadow-lg z-50">
-            Dashboard
-          </span>
+          <span class="absolute left-full ml-3 hidden group-hover:block whitespace-nowrap bg-[#4A154B] text-white text-xs px-3 py-1.5 rounded-lg shadow-lg z-50">Dashboard</span>
         </a>
 
-        <a href="profile.php"
-           class="group relative w-12 h-12 rounded-xl bg-white/10 hover:bg-white/20 flex items-center justify-center text-white transition-all hover:scale-110"
-           title="Profile">
+        <a href="profile.php" class="group relative w-12 h-12 rounded-xl bg-white/10 hover:bg-white/20 flex items-center justify-center text-white transition-all hover:scale-110" title="Profile">
           <i data-lucide="user" class="w-6 h-6"></i>
-          <span class="absolute left-full ml-3 hidden group-hover:block whitespace-nowrap bg-[#4A154B] text-white text-xs px-3 py-1.5 rounded-lg shadow-lg z-50">
-            Profile
-          </span>
+          <span class="absolute left-full ml-3 hidden group-hover:block whitespace-nowrap bg-[#4A154B] text-white text-xs px-3 py-1.5 rounded-lg shadow-lg z-50">Profile</span>
         </a>
 
-        <a href="grievances.php"
-           class="group relative w-12 h-12 rounded-xl bg-white/10 hover:bg-white/20 flex items-center justify-center text-white transition-all hover:scale-110"
-           title="Back to Grievance Hub">
+        <a href="grievances.php" class="group relative w-12 h-12 rounded-xl bg-white/10 hover:bg-white/20 flex items-center justify-center text-white transition-all hover:scale-110" title="Back to Grievance Hub">
           <i data-lucide="file-text" class="w-6 h-6 group-hover:scale-110 transition-transform duration-300"></i>
-          <span class="absolute left-full ml-3 hidden group-hover:block whitespace-nowrap bg-[#4A154B] text-white text-xs px-3 py-1.5 rounded-lg shadow-lg z-50">
-            Back to Grievance Hub
-          </span>
+          <span class="absolute left-full ml-3 hidden group-hover:block whitespace-nowrap bg-[#4A154B] text-white text-xs px-3 py-1.5 rounded-lg shadow-lg z-50">Back to Grievance Hub</span>
         </a>
-
       </nav>
 
-      <a href="#"
-         data-logout-trigger="1"
-         id="sidebarLogoutBtn"
-         class="group relative w-12 h-12 rounded-xl bg-white/10 hover:bg-red-500/40 flex items-center justify-center text-white transition-all hover:scale-110"
-         title="Logout">
+      <a href="#" data-logout-trigger="1" id="sidebarLogoutBtn"
+         class="group relative w-12 h-12 rounded-xl bg-white/10 hover:bg-red-500/40 flex items-center justify-center text-white transition-all hover:scale-110" title="Logout">
         <i data-lucide="log-out" class="w-6 h-6 group-hover:translate-x-0.5 transition-transform"></i>
-        <span class="absolute left-full ml-3 hidden group-hover:block whitespace-nowrap bg-red-600 text-white text-xs px-3 py-1.5 rounded-lg shadow-lg z-50">
-          Logout
-        </span>
+        <span class="absolute left-full ml-3 hidden group-hover:block whitespace-nowrap bg-red-600 text-white text-xs px-3 py-1.5 rounded-lg shadow-lg z-50">Logout</span>
       </a>
-
     </aside>
 
     <!-- MAIN CONTENT -->
@@ -411,49 +425,35 @@ function statusBadgeClass(string $status): string
       <!-- HEADER -->
       <header class="bg-white border-b border-slate-200 shadow-sm sticky top-0 z-30">
         <div class="flex items-center justify-between px-6 py-4">
-
           <div class="flex items-center space-x-4">
             <a href="dashboard.php" class="flex items-center group">
-              <img src="../public/rcss-logo.png" alt="RCSS Logo"
-                   class="h-10 md:h-11 w-auto transition-transform group-hover:scale-105" />
+              <img src="../public/rcss-logo.png" alt="RCSS Logo" class="h-10 md:h-11 w-auto transition-transform group-hover:scale-105" />
             </a>
-
             <div class="hidden sm:flex items-center h-10">
               <div class="w-px h-full bg-gradient-to-b from-transparent via-slate-300 to-transparent"></div>
             </div>
-
-            <img src="../public/orel-grievance.png" alt="Oréll Grievance"
-                 class="hidden sm:block h-8 md:h-9 w-auto object-contain" />
+            <img src="../public/orel-grievance.png" alt="Oréll Grievance" class="hidden sm:block h-8 md:h-9 w-auto object-contain" />
           </div>
 
           <div class="relative" id="admin-dropdown-container">
-            <button id="admin-dropdown-btn"
-                    type="button"
-                    aria-haspopup="true"
-                    aria-expanded="false"
+            <button id="admin-dropdown-btn" type="button" aria-haspopup="true" aria-expanded="false"
                     class="flex items-center space-x-3 px-3 py-2 rounded-xl hover:bg-slate-100 transition-colors cursor-pointer">
-
               <?php if ($hasProfilePicture): ?>
-                <img src="<?= e($profilePictureUrl) ?>" alt="<?= e($displayName) ?>"
-                     class="w-10 h-10 rounded-full object-cover border-2 border-[#C5A059] shadow-md ring-2 ring-purple-100" />
+                <img src="<?= e($profilePictureUrl) ?>" alt="<?= e($displayName) ?>" class="w-10 h-10 rounded-full object-cover border-2 border-[#C5A059] shadow-md ring-2 ring-purple-100" />
               <?php else: ?>
                 <div class="w-10 h-10 rounded-full bg-gradient-to-br from-[#4A154B] to-[#8B1E7E] flex items-center justify-center text-white shadow-md ring-2 ring-purple-100">
                   <i data-lucide="user" class="w-5 h-5"></i>
                 </div>
               <?php endif; ?>
-
               <span class="hidden sm:block text-sm font-semibold text-slate-700"><?= e($displayName) ?></span>
               <i data-lucide="chevron-down" id="admin-chevron" class="w-4 h-4 text-slate-500 transition-transform duration-300"></i>
             </button>
 
-            <div id="admin-dropdown-menu"
-                 class="hidden absolute right-0 mt-2 w-64 bg-white rounded-xl shadow-2xl border border-slate-200 py-2 z-50 overflow-hidden">
-
+            <div id="admin-dropdown-menu" class="hidden absolute right-0 mt-2 w-64 bg-white rounded-xl shadow-2xl border border-slate-200 py-2 z-50 overflow-hidden">
               <div class="px-4 py-3 border-b border-slate-100 bg-gradient-to-r from-slate-50 to-white">
                 <div class="flex items-center space-x-3">
                   <?php if ($hasProfilePicture): ?>
-                    <img src="<?= e($profilePictureUrl) ?>" alt="<?= e($displayName) ?>"
-                         class="w-12 h-12 rounded-full object-cover border-2 border-[#C5A059]" />
+                    <img src="<?= e($profilePictureUrl) ?>" alt="<?= e($displayName) ?>" class="w-12 h-12 rounded-full object-cover border-2 border-[#C5A059]" />
                   <?php else: ?>
                     <div class="w-12 h-12 rounded-full bg-gradient-to-br from-[#4A154B] to-[#8B1E7E] flex items-center justify-center text-white">
                       <i data-lucide="user" class="w-6 h-6 text-white"></i>
@@ -471,19 +471,16 @@ function statusBadgeClass(string $status): string
                 <span class="font-medium">Dashboard</span>
                 <i data-lucide="arrow-right" class="w-4 h-4 ml-auto opacity-0 group-hover/item:opacity-100 text-[#8B1E7E] transition-opacity"></i>
               </a>
-
               <a href="profile.php" class="flex items-center px-4 py-2.5 text-sm text-slate-700 hover:bg-gradient-to-r hover:from-pink-50 hover:to-purple-50 hover:text-[#8B1E7E] transition-all duration-200 group/item">
                 <i data-lucide="user" class="w-4 h-4 mr-3 text-[#8B1E7E] group-hover/item:scale-110 transition-transform"></i>
                 <span class="font-medium">My Profile</span>
                 <i data-lucide="arrow-right" class="w-4 h-4 ml-auto opacity-0 group-hover/item:opacity-100 text-[#8B1E7E] transition-opacity"></i>
               </a>
-
               <a href="change_password.php" class="flex items-center px-4 py-2.5 text-sm text-slate-700 hover:bg-gradient-to-r hover:from-pink-50 hover:to-purple-50 hover:text-[#8B1E7E] transition-all duration-200 group/item">
                 <i data-lucide="key" class="w-4 h-4 mr-3 text-[#8B1E7E] group-hover/item:scale-110 transition-transform"></i>
                 <span class="font-medium">Change Password</span>
                 <i data-lucide="arrow-right" class="w-4 h-4 ml-auto opacity-0 group-hover/item:opacity-100 text-[#8B1E7E] transition-opacity"></i>
               </a>
-
               <div class="border-t border-slate-100 mt-2 pt-2">
                 <a href="#" data-logout-trigger="1" id="dropdownLogoutBtn" class="flex items-center px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 transition-all duration-200 group/item">
                   <i data-lucide="log-out" class="w-4 h-4 mr-3 group-hover/item:scale-110 transition-transform"></i>
@@ -492,7 +489,6 @@ function statusBadgeClass(string $status): string
               </div>
             </div>
           </div>
-
         </div>
       </header>
 
@@ -502,40 +498,31 @@ function statusBadgeClass(string $status): string
         <!-- Breadcrumb -->
         <div class="max-w-6xl mx-auto mb-6 animate-fade-in-up">
           <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-
             <div>
-              <h1 class="text-2xl md:text-3xl font-bold text-slate-800 mb-2 tracking-tight">
-                Grievance Details
-              </h1>
+              <h1 class="text-2xl md:text-3xl font-bold text-slate-800 mb-2 tracking-tight">Grievance Details</h1>
               <nav class="flex items-center space-x-2 text-sm text-slate-500">
                 <a href="dashboard.php" class="flex items-center hover:text-[#8B1E7E] transition-colors">
-                  <i data-lucide="layout-dashboard" class="w-4 h-4 mr-1"></i>
-                  Dashboard
+                  <i data-lucide="layout-dashboard" class="w-4 h-4 mr-1"></i> Dashboard
                 </a>
                 <span class="text-slate-300">/</span>
-                <a href="grievances.php" class="hover:text-[#8B1E7E] transition-colors">
-                  Grievance
-                </a>
+                <a href="grievances.php" class="hover:text-[#8B1E7E] transition-colors">Grievance</a>
                 <span class="text-slate-300">/</span>
                 <span class="text-[#E5097F] font-semibold">Grievance Details</span>
               </nav>
             </div>
-
           </div>
         </div>
 
-        <!-- Flash Messages -->
+        <!-- Flash -->
         <?php if ($flashSuccess !== ''): ?>
-          <div id="flashSuccessBox"
-               class="max-w-6xl mx-auto mb-6 rounded-xl border-2 border-emerald-200 bg-emerald-50 px-4 py-3 flex items-start space-x-2 animate-flash-in overflow-hidden">
+          <div id="flashSuccessBox" class="max-w-6xl mx-auto mb-6 rounded-xl border-2 border-emerald-200 bg-emerald-50 px-4 py-3 flex items-start space-x-2 animate-flash-in overflow-hidden">
             <i data-lucide="check-circle" class="w-5 h-5 text-[#006837] flex-shrink-0 mt-0.5"></i>
             <p class="text-sm text-emerald-800 font-medium"><?= e($flashSuccess) ?></p>
           </div>
         <?php endif; ?>
 
         <?php if ($flashError !== ''): ?>
-          <div id="flashErrorBox"
-               class="max-w-6xl mx-auto mb-6 rounded-xl border-2 border-red-200 bg-red-50 px-4 py-3 flex items-start space-x-2 animate-flash-in overflow-hidden">
+          <div id="flashErrorBox" class="max-w-6xl mx-auto mb-6 rounded-xl border-2 border-red-200 bg-red-50 px-4 py-3 flex items-start space-x-2 animate-flash-in overflow-hidden">
             <i data-lucide="alert-circle" class="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5"></i>
             <p class="text-sm text-red-700 font-medium"><?= e($flashError) ?></p>
           </div>
@@ -545,7 +532,6 @@ function statusBadgeClass(string $status): string
         <div class="max-w-6xl mx-auto mb-5 animate-fade-in-up" style="animation-delay: 60ms;">
           <form method="GET" action="grievance_details.php" id="filterForm" class="bg-white rounded-xl shadow-sm border border-slate-200/70 px-5 py-4">
             <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-
               <div class="flex items-center space-x-3">
                 <span class="text-sm text-slate-600">Show</span>
                 <select name="entries" id="entriesPerPage"
@@ -562,17 +548,11 @@ function statusBadgeClass(string $status): string
 
               <div class="relative w-full sm:w-80">
                 <i data-lucide="search" class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400"></i>
-                <input type="text"
-                       name="q"
-                       id="searchInput"
-                       value="<?= e($search) ?>"
-                       placeholder="Search.."
-                       autocomplete="off"
+                <input type="text" name="q" id="searchInput" value="<?= e($search) ?>" placeholder="Search.." autocomplete="off"
                        class="w-full pl-10 pr-4 py-2 border-2 border-slate-200 rounded-lg text-sm
                               focus:outline-none focus:border-[#4A154B] focus:ring-4 focus:ring-[#4A154B]/10
                               hover:border-[#4A154B]/40 transition-all bg-white" />
               </div>
-
             </div>
           </form>
         </div>
@@ -580,7 +560,6 @@ function statusBadgeClass(string $status): string
         <!-- DATA TABLE -->
         <div class="max-w-6xl mx-auto animate-fade-in-up" style="animation-delay: 100ms;">
           <div class="bg-white rounded-2xl shadow-lg border border-slate-200/70 overflow-hidden">
-
             <div class="overflow-x-auto">
               <table class="w-full" id="grievancesTable">
                 <thead>
@@ -593,13 +572,12 @@ function statusBadgeClass(string $status): string
                     <th class="px-6 py-4 text-left text-xs font-bold uppercase tracking-wider">Subject</th>
                     <th class="px-6 py-4 text-left text-xs font-bold uppercase tracking-wider">Status</th>
                     <th class="px-6 py-4 text-center text-xs font-bold uppercase tracking-wider">Actions</th>
-                    <th class="px-6 py-4 text-left text-xs font-bold uppercase tracking-wider">Remainder/ Reopen</th>
+                    <th class="px-6 py-4 text-left text-xs font-bold uppercase tracking-wider">Remainder</th>
                   </tr>
                 </thead>
                 <tbody class="divide-y divide-slate-100" id="grievancesTableBody">
 
                   <?php if (empty($grievances)): ?>
-
                     <tr>
                       <td colspan="9" class="px-6 py-16 text-center text-slate-500">
                         <div class="flex flex-col items-center justify-center">
@@ -613,7 +591,6 @@ function statusBadgeClass(string $status): string
                         </div>
                       </td>
                     </tr>
-
                   <?php else: ?>
 
                     <?php foreach ($grievances as $index => $gr): ?>
@@ -632,46 +609,72 @@ function statusBadgeClass(string $status): string
                         $grFeedback   = (string) ($gr['feedback_details']  ?? '');
                         $grStatus     = (string) ($gr['status']            ?? 'Pending');
                         $grAttendee   = (string) ($gr['attendee_name']     ?? '');
+                        $grAttach     = (string) ($gr['attachment_path']   ?? '');
+                        $grReplyAttach= (string) ($gr['reply_attachment_path'] ?? '');
                         $statusCls    = statusBadgeClass($grStatus);
 
-                        // Format dates
+                        // Resolve attachments
+                        $imageExts = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp'];
+
+                        $attachUrl    = '';
+                        $attachIsImg  = false;
+                        $attachExt    = '';
+                        if ($grAttach !== '') {
+                            $rel = ltrim($grAttach, '/');
+                            if (file_exists(__DIR__ . '/../' . $rel)) {
+                                $attachUrl    = '../' . $rel;
+                                $attachExt    = strtolower(pathinfo($rel, PATHINFO_EXTENSION));
+                                $attachIsImg  = in_array($attachExt, $imageExts, true);
+                            }
+                        }
+
+                        $replyAttachUrl   = '';
+                        $replyAttachIsImg = false;
+                        $replyAttachExt   = '';
+                        if ($grReplyAttach !== '') {
+                            $rel2 = ltrim($grReplyAttach, '/');
+                            if (file_exists(__DIR__ . '/../' . $rel2)) {
+                                $replyAttachUrl   = '../' . $rel2;
+                                $replyAttachExt   = strtolower(pathinfo($rel2, PATHINFO_EXTENSION));
+                                $replyAttachIsImg = in_array($replyAttachExt, $imageExts, true);
+                            }
+                        }
+
+                        // Prepare actions list for this grievance
+                        $actionsForThis = $actionsByGrievance[$grId] ?? [];
+                        $actionsJson = [];
+                        foreach ($actionsForThis as $act) {
+                            $actionsJson[] = [
+                                'date'           => !empty($act['action_date']) ? date('d M Y', strtotime((string) $act['action_date'])) : '',
+                                'attendee_name'  => (string) ($act['attendee_name'] ?? ''),
+                                'attendee_desig' => (string) ($act['attendee_designation'] ?? ''),
+                                'summary'        => (string) ($act['summary'] ?? ''),
+                                'action_taken'   => (string) ($act['action_taken'] ?? ''),
+                                'created_by'     => (string) ($act['created_by_username'] ?? ''),
+                            ];
+                        }
+
                         $formattedDate = '—';
                         if ($grDate !== '') {
                             $ts = strtotime($grDate);
-                            if ($ts !== false) {
-                                $formattedDate = date('Y-m-d', $ts);
-                            }
+                            if ($ts !== false) $formattedDate = date('Y-m-d', $ts);
                         }
 
                         $formattedUpdated = '—';
                         if ($grUpdated !== '') {
                             $ts2 = strtotime($grUpdated);
-                            if ($ts2 !== false) {
-                                $formattedUpdated = date('d M Y, h:i A', $ts2);
-                            }
+                            if ($ts2 !== false) $formattedUpdated = date('d M Y, h:i A', $ts2);
                         }
 
                         $globalIndex = $offset + $index + 1;
                       ?>
                       <tr class="hover:bg-slate-50/80 transition-colors group">
-                        <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-slate-900">
-                          <?= $globalIndex ?>
-                        </td>
-                        <td class="px-6 py-4 whitespace-nowrap text-sm font-semibold text-[#4A154B]">
-                          <?= e($grNumber) ?>
-                        </td>
-                        <td class="px-6 py-4 text-sm text-slate-700 max-w-[220px]">
-                          <?= e($grType) ?>
-                        </td>
-                        <td class="px-6 py-4 text-sm text-slate-800 font-medium max-w-[180px]">
-                          <?= e($grName) ?>
-                        </td>
-                        <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-600">
-                          <?= e($formattedDate) ?>
-                        </td>
-                        <td class="px-6 py-4 text-sm text-slate-700 max-w-[220px]">
-                          <?= e($grSubject !== '' ? $grSubject : '—') ?>
-                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-slate-900"><?= $globalIndex ?></td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm font-semibold text-[#4A154B]"><?= e($grNumber) ?></td>
+                        <td class="px-6 py-4 text-sm text-slate-700 max-w-[220px]"><?= e($grType) ?></td>
+                        <td class="px-6 py-4 text-sm text-slate-800 font-medium max-w-[180px]"><?= e($grName) ?></td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-600"><?= e($formattedDate) ?></td>
+                        <td class="px-6 py-4 text-sm text-slate-700 max-w-[220px]"><?= e($grSubject !== '' ? $grSubject : '—') ?></td>
                         <td class="px-6 py-4 whitespace-nowrap">
                           <span class="inline-flex items-center px-3 py-1 text-xs font-semibold rounded-full border <?= $statusCls ?>">
                             <?= e($grStatus) ?>
@@ -680,39 +683,42 @@ function statusBadgeClass(string $status): string
                         <td class="px-6 py-4 whitespace-nowrap">
                           <div class="flex items-center justify-center gap-2">
 
-                            <!-- View (Eye) — opens View Grievance modal -->
-                            <button type="button"
-                                    title="View grievance"
-                                    onclick='openViewGrievanceModal(
-                                        <?= json_encode($grNumber) ?>,
-                                        <?= json_encode($grType) ?>,
-                                        <?= json_encode($grName) ?>,
-                                        <?= json_encode($grEmail) ?>,
-                                        <?= json_encode($grRole) ?>,
-                                        <?= json_encode($grSubject) ?>,
-                                        <?= json_encode($grDesc) ?>,
-                                        <?= json_encode($grStatus) ?>,
-                                        <?= json_encode($grReply) ?>,
-                                        <?= json_encode($grFeedback) ?>,
-                                        <?= json_encode($formattedDate) ?>,
-                                        <?= json_encode($formattedUpdated) ?>,
-                                        <?= json_encode($grAttendee) ?>
-                                    )'
+                            <!-- View (Eye) -->
+                            <button type="button" title="View grievance"
+                                    onclick='openViewGrievanceModal(<?= htmlspecialchars(json_encode([
+                                        "number"           => $grNumber,
+                                        "type"             => $grType,
+                                        "name"             => $grName,
+                                        "email"            => $grEmail,
+                                        "role"             => $grRole,
+                                        "subject"          => $grSubject,
+                                        "description"      => $grDesc,
+                                        "status"           => $grStatus,
+                                        "reply"            => $grReply,
+                                        "feedback"         => $grFeedback,
+                                        "date"             => $formattedDate,
+                                        "updated"          => $formattedUpdated,
+                                        "attendee"         => $grAttendee,
+                                        "attachment_url"   => $attachUrl,
+                                        "attachment_ext"   => $attachExt,
+                                        "attachment_is_img"=> $attachIsImg,
+                                        "reply_attach_url" => $replyAttachUrl,
+                                        "reply_attach_ext" => $replyAttachExt,
+                                        "reply_attach_is_img" => $replyAttachIsImg,
+                                    ]), ENT_QUOTES, 'UTF-8') ?>)'
                                     class="w-9 h-9 rounded-full bg-purple-50 hover:bg-[#4A154B]
                                            flex items-center justify-center text-[#4A154B] hover:text-white
                                            transition-all duration-200 hover:scale-110">
                               <i data-lucide="eye" class="w-4 h-4"></i>
                             </button>
 
-                            <!-- Action Summary (Three lines / list) -->
-                            <button type="button"
-                                    title="Action summary"
-                                    onclick='openActionSummary(
-                                        <?= json_encode($grNumber) ?>,
-                                        <?= json_encode($grSubject) ?>,
-                                        <?= json_encode($formattedDate) ?>,
-                                        <?= json_encode($grAttendee !== '' ? $grAttendee : 'No Data') ?>
-                                    )'
+                            <!-- Action Summary (list) -->
+                            <button type="button" title="Action summary"
+                                    onclick='openActionSummary(<?= htmlspecialchars(json_encode([
+                                        "number"  => $grNumber,
+                                        "subject" => $grSubject,
+                                        "actions" => $actionsJson,
+                                    ]), ENT_QUOTES, 'UTF-8') ?>)'
                                     class="w-9 h-9 rounded-full bg-purple-50 hover:bg-[#4A154B]
                                            flex items-center justify-center text-[#4A154B] hover:text-white
                                            transition-all duration-200 hover:scale-110">
@@ -744,10 +750,9 @@ function statusBadgeClass(string $status): string
               </table>
             </div>
 
-            <!-- Footer Info & Pagination -->
+            <!-- Pagination -->
             <?php if ($totalRows > 0): ?>
               <div class="px-6 py-4 bg-slate-50/50 border-t border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-4">
-
                 <p class="text-sm text-slate-600" id="tableInfo">
                   Showing
                   <span class="font-semibold text-slate-900"><?= $offset + 1 ?></span>
@@ -759,29 +764,17 @@ function statusBadgeClass(string $status): string
                 </p>
 
                 <div class="flex items-center space-x-2">
-
                   <?php
                     $qsBase = 'grievance_details.php?entries=' . $entries;
-                    if ($search !== '') {
-                        $qsBase .= '&q=' . urlencode($search);
-                    }
+                    if ($search !== '') $qsBase .= '&q=' . urlencode($search);
                   ?>
 
-                  <!-- Previous -->
                   <?php if ($page > 1): ?>
-                    <a href="<?= e($qsBase . '&page=' . ($page - 1)) ?>"
-                       class="px-4 py-2 rounded-lg text-sm font-medium text-slate-700 bg-white hover:bg-slate-100 border border-slate-200 transition-colors">
-                      Previous
-                    </a>
+                    <a href="<?= e($qsBase . '&page=' . ($page - 1)) ?>" class="px-4 py-2 rounded-lg text-sm font-medium text-slate-700 bg-white hover:bg-slate-100 border border-slate-200 transition-colors">Previous</a>
                   <?php else: ?>
-                    <button type="button"
-                            class="px-4 py-2 rounded-lg text-sm font-medium text-slate-400 bg-slate-50 border border-slate-200 cursor-not-allowed"
-                            disabled>
-                      Previous
-                    </button>
+                    <button type="button" class="px-4 py-2 rounded-lg text-sm font-medium text-slate-400 bg-slate-50 border border-slate-200 cursor-not-allowed" disabled>Previous</button>
                   <?php endif; ?>
 
-                  <!-- Page numbers -->
                   <?php
                     $pageWindow = 2;
                     $startPage  = max(1, $page - $pageWindow);
@@ -789,9 +782,7 @@ function statusBadgeClass(string $status): string
 
                     if ($startPage > 1) {
                         echo '<a href="' . e($qsBase . '&page=1') . '" class="px-3 py-2 rounded-lg text-sm font-medium text-slate-700 bg-white hover:bg-slate-100 border border-slate-200 transition-colors">1</a>';
-                        if ($startPage > 2) {
-                            echo '<span class="px-2 text-slate-400">…</span>';
-                        }
+                        if ($startPage > 2) echo '<span class="px-2 text-slate-400">…</span>';
                     }
 
                     for ($p = $startPage; $p <= $endPage; $p++) {
@@ -803,29 +794,17 @@ function statusBadgeClass(string $status): string
                     }
 
                     if ($endPage < $totalPages) {
-                        if ($endPage < $totalPages - 1) {
-                            echo '<span class="px-2 text-slate-400">…</span>';
-                        }
+                        if ($endPage < $totalPages - 1) echo '<span class="px-2 text-slate-400">…</span>';
                         echo '<a href="' . e($qsBase . '&page=' . $totalPages) . '" class="px-3 py-2 rounded-lg text-sm font-medium text-slate-700 bg-white hover:bg-slate-100 border border-slate-200 transition-colors">' . $totalPages . '</a>';
                     }
                   ?>
 
-                  <!-- Next -->
                   <?php if ($page < $totalPages): ?>
-                    <a href="<?= e($qsBase . '&page=' . ($page + 1)) ?>"
-                       class="px-4 py-2 rounded-lg text-sm font-medium text-slate-700 bg-white hover:bg-slate-100 border border-slate-200 transition-colors">
-                      Next
-                    </a>
+                    <a href="<?= e($qsBase . '&page=' . ($page + 1)) ?>" class="px-4 py-2 rounded-lg text-sm font-medium text-slate-700 bg-white hover:bg-slate-100 border border-slate-200 transition-colors">Next</a>
                   <?php else: ?>
-                    <button type="button"
-                            class="px-4 py-2 rounded-lg text-sm font-medium text-slate-400 bg-slate-50 border border-slate-200 cursor-not-allowed"
-                            disabled>
-                      Next
-                    </button>
+                    <button type="button" class="px-4 py-2 rounded-lg text-sm font-medium text-slate-400 bg-slate-50 border border-slate-200 cursor-not-allowed" disabled>Next</button>
                   <?php endif; ?>
-
                 </div>
-
               </div>
             <?php endif; ?>
 
@@ -840,24 +819,20 @@ function statusBadgeClass(string $status): string
           <div class="max-w-7xl mx-auto text-center">
             <p class="text-xs text-slate-700">
               Copyright &copy; <?= date('Y') ?>
-              <span class="font-bold text-[#006837]">Rajagiri College of Social Sciences</span>.
-              All rights reserved.
+              <span class="font-bold text-[#006837]">Rajagiri College of Social Sciences</span>. All rights reserved.
             </p>
             <p class="text-xs text-slate-700 mt-1">
               Powered by
-              <span class="font-bold bg-gradient-to-r from-[#4A154B] to-[#E5097F] bg-clip-text text-transparent ml-1">
-                Orell
-              </span>
+              <span class="font-bold bg-gradient-to-r from-[#4A154B] to-[#E5097F] bg-clip-text text-transparent ml-1">Orell</span>
             </p>
           </div>
         </div>
       </footer>
-
     </div>
   </div>
 
   <!-- ============================================================= -->
-  <!-- VIEW GRIEVANCE MODAL (opened by the eye icon)                 -->
+  <!-- VIEW GRIEVANCE MODAL (with attachments + reply attachment)     -->
   <!-- ============================================================= -->
   <div id="viewGrievanceModal" class="hidden fixed inset-0 z-[65] flex items-center justify-center p-4">
     <div class="absolute inset-0 bg-black/40 backdrop-blur-sm" onclick="closeViewGrievanceModal()"></div>
@@ -877,7 +852,6 @@ function statusBadgeClass(string $status): string
 
       <div class="p-6 overflow-y-auto flex-1 space-y-5">
 
-        <!-- Header block: number + subject + status -->
         <div class="flex items-start space-x-4 pb-4 border-b border-slate-100">
           <div class="w-14 h-14 rounded-full bg-gradient-to-br from-[#4A154B] to-[#8B1E7E]
                       flex items-center justify-center text-white shadow-md flex-shrink-0">
@@ -894,7 +868,6 @@ function statusBadgeClass(string $status): string
           </div>
         </div>
 
-        <!-- Meta grid -->
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div class="bg-slate-50 rounded-xl p-3 border border-slate-100">
             <p class="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1">Grievance Type</p>
@@ -919,7 +892,6 @@ function statusBadgeClass(string $status): string
           </div>
         </div>
 
-        <!-- Description -->
         <div>
           <p class="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1.5">Description</p>
           <div class="bg-slate-50 rounded-xl p-4 border border-slate-100">
@@ -927,7 +899,36 @@ function statusBadgeClass(string $status): string
           </div>
         </div>
 
-        <!-- Reply -->
+        <!-- Original Attachment -->
+        <div id="vgAttachmentWrap" class="hidden">
+          <p class="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1.5">Original Attachment</p>
+          <div class="bg-slate-50 rounded-xl p-4 border border-slate-100 flex items-center justify-between gap-3 flex-wrap">
+            <div class="flex items-center min-w-0">
+              <div class="w-9 h-9 rounded-lg bg-white flex items-center justify-center flex-shrink-0 border border-slate-200">
+                <i data-lucide="paperclip" class="w-4 h-4 text-[#8B1E7E]"></i>
+              </div>
+              <div class="min-w-0 ml-3">
+                <p class="text-sm font-semibold text-slate-800 truncate" id="vgAttachmentName">attachment</p>
+                <p class="text-[11px] text-slate-500" id="vgAttachmentMeta">—</p>
+              </div>
+            </div>
+            <div class="flex items-center gap-2 flex-shrink-0">
+              <button type="button" id="vgAttachmentViewBtn"
+                      class="inline-flex items-center px-3 py-2 rounded-lg
+                             bg-purple-50 hover:bg-[#4A154B] text-[#4A154B] hover:text-white
+                             text-xs font-bold transition-all duration-200 hover:-translate-y-0.5 active:scale-95">
+                <i data-lucide="eye" class="w-3.5 h-3.5 mr-1.5"></i> View
+              </button>
+              <a id="vgAttachmentDownloadBtn" href="#" download
+                 class="inline-flex items-center px-3 py-2 rounded-lg
+                        bg-emerald-50 hover:bg-[#006837] text-[#006837] hover:text-white
+                        text-xs font-bold transition-all duration-200 hover:-translate-y-0.5 active:scale-95">
+                <i data-lucide="download" class="w-3.5 h-3.5 mr-1.5"></i> Download
+              </a>
+            </div>
+          </div>
+        </div>
+
         <div>
           <p class="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1.5">Reply / Response</p>
           <div class="bg-emerald-50 rounded-xl p-4 border border-emerald-100">
@@ -935,7 +936,36 @@ function statusBadgeClass(string $status): string
           </div>
         </div>
 
-        <!-- Feedback -->
+        <!-- Reply Attachment -->
+        <div id="vgReplyAttachmentWrap" class="hidden">
+          <p class="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1.5">Reply Attachment</p>
+          <div class="bg-emerald-50/60 rounded-xl p-4 border border-emerald-200 flex items-center justify-between gap-3 flex-wrap">
+            <div class="flex items-center min-w-0">
+              <div class="w-9 h-9 rounded-lg bg-white flex items-center justify-center flex-shrink-0 border border-emerald-200">
+                <i data-lucide="paperclip" class="w-4 h-4 text-[#006837]"></i>
+              </div>
+              <div class="min-w-0 ml-3">
+                <p class="text-sm font-semibold text-slate-800 truncate" id="vgReplyAttachmentName">attachment</p>
+                <p class="text-[11px] text-slate-500" id="vgReplyAttachmentMeta">—</p>
+              </div>
+            </div>
+            <div class="flex items-center gap-2 flex-shrink-0">
+              <button type="button" id="vgReplyAttachmentViewBtn"
+                      class="inline-flex items-center px-3 py-2 rounded-lg
+                             bg-white hover:bg-[#006837] text-[#006837] hover:text-white
+                             text-xs font-bold transition-all duration-200 hover:-translate-y-0.5 active:scale-95">
+                <i data-lucide="eye" class="w-3.5 h-3.5 mr-1.5"></i> View
+              </button>
+              <a id="vgReplyAttachmentDownloadBtn" href="#" download
+                 class="inline-flex items-center px-3 py-2 rounded-lg
+                        bg-emerald-50 hover:bg-[#006837] text-[#006837] hover:text-white
+                        text-xs font-bold transition-all duration-200 hover:-translate-y-0.5 active:scale-95">
+                <i data-lucide="download" class="w-3.5 h-3.5 mr-1.5"></i> Download
+              </a>
+            </div>
+          </div>
+        </div>
+
         <div>
           <p class="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1.5">Feedback</p>
           <div class="bg-amber-50 rounded-xl p-4 border border-amber-100">
@@ -953,24 +983,23 @@ function statusBadgeClass(string $status): string
           Close
         </button>
       </div>
-
     </div>
   </div>
 
   <!-- ============================================================= -->
-  <!-- ACTION SUMMARY MODAL (opened by the list icon)                -->
+  <!-- ACTION SUMMARY MODAL (renders saved actions from DB)           -->
   <!-- ============================================================= -->
-  <div id="actionSummaryModal" class="hidden fixed inset-0 z-[65] flex items-start justify-center p-4 pt-20">
+  <div id="actionSummaryModal" class="hidden fixed inset-0 z-[66] flex items-start justify-center p-4 pt-16">
     <div class="absolute inset-0 bg-black/30 backdrop-blur-sm" onclick="closeActionSummary()"></div>
 
-    <div class="relative w-full max-w-2xl bg-white rounded-xl shadow-2xl animate-modal-in overflow-hidden">
+    <div class="relative w-full max-w-2xl max-h-[88vh] bg-white rounded-xl shadow-2xl animate-modal-in
+                overflow-hidden flex flex-col">
 
-      <!-- Title banner -->
-      <div class="bg-pink-100 text-pink-900 px-5 py-2.5 border-b border-pink-200">
+      <div class="bg-pink-100 text-pink-900 px-5 py-2.5 border-b border-pink-200 flex-shrink-0">
         <p id="asTitle" class="text-sm font-semibold truncate">—</p>
       </div>
 
-      <div class="flex items-center justify-between px-6 pt-5 pb-3">
+      <div class="flex items-center justify-between px-6 pt-5 pb-3 flex-shrink-0">
         <h3 class="text-xl font-bold text-slate-800">Action Summary</h3>
         <button type="button" onclick="closeActionSummary()"
                 class="w-8 h-8 rounded-lg hover:bg-slate-100 flex items-center justify-center text-slate-500 transition-colors">
@@ -978,32 +1007,71 @@ function statusBadgeClass(string $status): string
         </button>
       </div>
 
-      <div class="px-6 pb-6">
-        <div class="border border-slate-200 rounded-lg overflow-hidden">
-          <div class="flex items-center justify-between px-4 py-4 border-b border-slate-200 bg-slate-50/40">
-            <span class="text-sm font-medium text-slate-700">Date</span>
-            <span id="asDate" class="text-sm font-medium text-slate-800">No Date</span>
-          </div>
+      <div class="px-6 pb-6 overflow-y-auto flex-1">
+        <div id="asList" class="space-y-3"></div>
 
-          <div class="flex items-center justify-between px-4 py-4 bg-white">
-            <span class="text-sm font-medium text-slate-700">Attendee</span>
-            <span id="asAttendee" class="text-sm font-medium text-slate-800">No Data</span>
+        <div id="asEmpty" class="hidden border border-slate-200 rounded-lg p-8 text-center">
+          <div class="inline-flex items-center justify-center w-12 h-12 rounded-full bg-slate-100 mb-3">
+            <i data-lucide="list-x" class="w-6 h-6 text-slate-400"></i>
           </div>
+          <p class="text-sm font-semibold text-slate-600">No action summaries recorded</p>
+          <p class="text-xs text-slate-500 mt-1">Nothing has been logged for this grievance yet.</p>
         </div>
       </div>
 
+      <div class="px-6 py-4 bg-slate-50 border-t border-slate-100 flex justify-end flex-shrink-0">
+        <button type="button" onclick="closeActionSummary()"
+                class="px-5 py-2.5 rounded-xl font-semibold text-slate-700
+                       bg-white hover:bg-slate-100 border border-slate-200
+                       transition-all duration-200 active:scale-95">
+          Close
+        </button>
+      </div>
     </div>
   </div>
 
   <!-- ============================================================= -->
-  <!-- CUSTOM LOGOUT CONFIRMATION MODAL                              -->
+  <!-- LIGHTBOX (opens image previews on the page)                    -->
+  <!-- ============================================================= -->
+  <div id="lightbox" class="hidden fixed inset-0 z-[100] bg-black/90 backdrop-blur-md animate-lightbox-in">
+    <div id="lightboxToolbar"
+         class="absolute top-0 left-0 right-0 px-4 py-3 flex items-center justify-between gap-3
+                bg-gradient-to-b from-black/70 to-transparent z-10">
+      <div class="flex items-center min-w-0 text-white">
+        <i data-lucide="image" class="w-5 h-5 mr-2 flex-shrink-0"></i>
+        <span class="text-sm font-semibold truncate" id="lightboxFilename">attachment</span>
+      </div>
+      <div class="flex items-center gap-2 flex-shrink-0">
+        <a id="lightboxDownloadBtn" href="#" download
+           class="inline-flex items-center px-4 py-2 rounded-lg
+                  bg-white/10 hover:bg-white/20 text-white text-sm font-semibold
+                  border border-white/20 transition-all duration-200 hover:-translate-y-0.5">
+          <i data-lucide="download" class="w-4 h-4 mr-2"></i> Download
+        </a>
+        <button type="button" data-lightbox-close="1"
+                class="inline-flex items-center justify-center w-10 h-10 rounded-lg
+                       bg-white/10 hover:bg-red-500/80 text-white
+                       border border-white/20 transition-all duration-200
+                       active:scale-95 cursor-pointer" title="Close (Esc)" aria-label="Close">
+          <i data-lucide="x" class="w-5 h-5 pointer-events-none"></i>
+        </button>
+      </div>
+    </div>
+
+    <div id="lightboxStage" class="absolute inset-0 pt-16 pb-4 px-4 flex items-center justify-center">
+      <img id="lightboxImage" src="" alt="Attachment preview"
+           class="max-w-full max-h-full object-contain rounded-lg shadow-2xl bg-white select-none" />
+    </div>
+  </div>
+
+  <!-- ============================================================= -->
+  <!-- LOGOUT MODAL                                                  -->
   <!-- ============================================================= -->
   <div id="logoutConfirmModal" class="hidden fixed inset-0 z-[70] flex items-center justify-center p-4">
     <div class="absolute inset-0 bg-black/50 backdrop-blur-sm" onclick="closeLogoutModal()"></div>
 
     <div id="logoutConfirmPanel"
          class="relative w-full max-w-md bg-white rounded-2xl shadow-2xl animate-modal-in overflow-hidden">
-
       <div class="h-1.5 w-full bg-gradient-to-r from-[#6A2C8A] via-[#8B1E7E] to-[#C43A7A]"></div>
 
       <div class="px-6 pt-6 pb-2 flex flex-col items-center text-center">
@@ -1011,32 +1079,25 @@ function statusBadgeClass(string $status): string
                     bg-gradient-to-br from-red-100 to-pink-100 ring-4 ring-red-50">
           <i data-lucide="log-out" class="w-8 h-8 text-red-500"></i>
         </div>
-
         <h3 class="text-xl font-bold text-slate-800 mb-2">Log Out?</h3>
-
         <p class="text-sm text-slate-500 leading-relaxed">
           You are about to log out of
           <span class="font-bold text-[#8B1E7E] break-words"><?= e($displayName) ?></span>.
           Any unsaved changes will be lost.
         </p>
-
         <p class="text-xs text-slate-400 font-medium mt-3 flex items-center gap-1.5">
-          <i data-lucide="info" class="w-3.5 h-3.5"></i>
-          You can log back in anytime.
+          <i data-lucide="info" class="w-3.5 h-3.5"></i> You can log back in anytime.
         </p>
       </div>
 
       <div class="px-6 py-5 mt-2 flex flex-col-reverse sm:flex-row gap-3">
-        <button type="button"
-                onclick="closeLogoutModal()"
+        <button type="button" onclick="closeLogoutModal()"
                 class="flex-1 px-5 py-3 rounded-xl font-semibold text-slate-700
                        bg-slate-100 hover:bg-slate-200 border border-slate-200
                        transition-all duration-200 active:scale-95">
           Cancel
         </button>
-
-        <button type="button"
-                id="confirmLogoutBtn"
+        <button type="button" id="confirmLogoutBtn"
                 class="flex-1 px-5 py-3 rounded-xl font-bold text-white
                        bg-gradient-to-r from-red-500 via-red-600 to-rose-600
                        hover:from-red-600 hover:via-red-700 hover:to-rose-700
@@ -1047,16 +1108,13 @@ function statusBadgeClass(string $status): string
           <span>Log Out</span>
         </button>
       </div>
-
     </div>
   </div>
 
   <script>
-    if (typeof lucide !== 'undefined') {
-      lucide.createIcons();
-    }
+    if (typeof lucide !== 'undefined') { lucide.createIcons(); }
 
-    // ---- Auto-dismiss flash messages after 3 seconds ----
+    /* Flash auto-dismiss */
     (function () {
       ['flashSuccessBox', 'flashErrorBox'].forEach(function (id) {
         const box = document.getElementById(id);
@@ -1069,26 +1127,23 @@ function statusBadgeClass(string $status): string
       });
     })();
 
-    // ---- Admin profile dropdown ----
+    /* Admin dropdown */
     (function () {
-      const btn       = document.getElementById('admin-dropdown-btn');
-      const menu      = document.getElementById('admin-dropdown-menu');
-      const chevron   = document.getElementById('admin-chevron');
+      const btn = document.getElementById('admin-dropdown-btn');
+      const menu = document.getElementById('admin-dropdown-menu');
+      const chevron = document.getElementById('admin-chevron');
       const container = document.getElementById('admin-dropdown-container');
-
       if (!btn || !menu || !container) return;
 
       btn.addEventListener('click', function (e) {
         e.stopPropagation();
         const isOpen = !menu.classList.contains('hidden');
         if (isOpen) {
-          menu.classList.add('hidden');
-          menu.classList.remove('animate-dropdown');
+          menu.classList.add('hidden'); menu.classList.remove('animate-dropdown');
           if (chevron) chevron.classList.remove('rotate-180');
           btn.setAttribute('aria-expanded', 'false');
         } else {
-          menu.classList.remove('hidden');
-          menu.classList.add('animate-dropdown');
+          menu.classList.remove('hidden'); menu.classList.add('animate-dropdown');
           if (chevron) chevron.classList.add('rotate-180');
           btn.setAttribute('aria-expanded', 'true');
         }
@@ -1096,8 +1151,7 @@ function statusBadgeClass(string $status): string
 
       document.addEventListener('click', function (e) {
         if (!container.contains(e.target)) {
-          menu.classList.add('hidden');
-          menu.classList.remove('animate-dropdown');
+          menu.classList.add('hidden'); menu.classList.remove('animate-dropdown');
           if (chevron) chevron.classList.remove('rotate-180');
           btn.setAttribute('aria-expanded', 'false');
         }
@@ -1105,17 +1159,78 @@ function statusBadgeClass(string $status): string
 
       document.addEventListener('keydown', function (e) {
         if (e.key === 'Escape') {
-          menu.classList.add('hidden');
-          menu.classList.remove('animate-dropdown');
+          menu.classList.add('hidden'); menu.classList.remove('animate-dropdown');
           if (chevron) chevron.classList.remove('rotate-180');
           btn.setAttribute('aria-expanded', 'false');
         }
       });
     })();
 
-    // ============================================================
-    // VIEW GRIEVANCE MODAL (triggered by the eye icon)
-    // ============================================================
+    /* Helpers */
+    function escHtml(s) {
+      return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+        return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+      });
+    }
+    function filenameFromUrl(url) {
+      if (!url) return 'attachment';
+      try {
+        const clean = url.split('?')[0].split('#')[0];
+        const parts = clean.split('/');
+        let name = parts[parts.length - 1] || 'attachment';
+        name = name.replace(/^(reply|grv)_\d+_\d+_[a-f0-9]+_/i, '');
+        return decodeURIComponent(name);
+      } catch (e) { return 'attachment'; }
+    }
+
+    /* Lightbox */
+    const lightbox = document.getElementById('lightbox');
+    const lightboxImage = document.getElementById('lightboxImage');
+    const lightboxFilename = document.getElementById('lightboxFilename');
+    const lightboxDownloadBtn = document.getElementById('lightboxDownloadBtn');
+    const lightboxStage = document.getElementById('lightboxStage');
+
+    function openLightbox(url, filename) {
+      if (!lightbox || !lightboxImage) return;
+      lightboxImage.src = url || '';
+      if (lightboxFilename) lightboxFilename.textContent = filename || 'attachment';
+      if (lightboxDownloadBtn) {
+        lightboxDownloadBtn.setAttribute('href', url || '#');
+        lightboxDownloadBtn.setAttribute('download', filename || '');
+      }
+      lightbox.classList.remove('hidden');
+      document.body.classList.add('overflow-hidden');
+      if (typeof lucide !== 'undefined') lucide.createIcons();
+    }
+    function closeLightbox() {
+      if (!lightbox) return;
+      lightbox.classList.add('hidden');
+      if (lightboxImage) lightboxImage.src = '';
+      const anyOpen = (viewGrievanceModal && !viewGrievanceModal.classList.contains('hidden'))
+                   || (actionSummaryModal && !actionSummaryModal.classList.contains('hidden'))
+                   || (logoutConfirmModal && !logoutConfirmModal.classList.contains('hidden'));
+      if (!anyOpen) document.body.classList.remove('overflow-hidden');
+    }
+
+    document.addEventListener('click', function (e) {
+      const closeEl = e.target.closest('[data-lightbox-close="1"]');
+      if (closeEl && lightbox && !lightbox.classList.contains('hidden')) {
+        e.preventDefault(); e.stopPropagation();
+        closeLightbox();
+      }
+    });
+    if (lightboxStage) lightboxStage.addEventListener('click', function (e) { if (e.target === lightboxStage) closeLightbox(); });
+    if (lightbox) lightbox.addEventListener('click', function (e) { if (e.target === lightbox) closeLightbox(); });
+    const lightboxToolbar = document.getElementById('lightboxToolbar');
+    if (lightboxToolbar) {
+      lightboxToolbar.addEventListener('click', function (e) {
+        if (!e.target.closest('[data-lightbox-close="1"]') && !e.target.closest('#lightboxDownloadBtn')) e.stopPropagation();
+      });
+    }
+
+    /* ============================================================
+       VIEW GRIEVANCE MODAL
+       ============================================================ */
     const viewGrievanceModal = document.getElementById('viewGrievanceModal');
 
     function statusBadgeHtml(status) {
@@ -1128,124 +1243,216 @@ function statusBadgeClass(string $status): string
         'Reopened':    'bg-pink-100 text-pink-800 border-pink-200'
       };
       const cls = map[s] || 'bg-slate-100 text-slate-700 border-slate-200';
-      return '<span class="inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider border ' + cls + '">' + s + '</span>';
+      return '<span class="inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider border ' + cls + '">' + escHtml(s) + '</span>';
     }
 
-    function openViewGrievanceModal(number, type, name, email, role, subject, description,
-                                    status, reply, feedback, date, updated, attendee) {
-      if (!viewGrievanceModal) return;
+    function openViewGrievanceModal(data) {
+      if (!viewGrievanceModal || !data) return;
 
-      document.getElementById('vgNumber').textContent    = number || '—';
-      document.getElementById('vgSubject').textContent   = subject || '—';
-      document.getElementById('vgStatus').innerHTML      = statusBadgeHtml(status);
-      document.getElementById('vgDate').textContent      = date || '—';
-      document.getElementById('vgType').textContent      = type || '—';
+      document.getElementById('vgNumber').textContent    = data.number || '—';
+      document.getElementById('vgSubject').textContent   = data.subject || '—';
+      document.getElementById('vgStatus').innerHTML      = statusBadgeHtml(data.status || 'Pending');
+      document.getElementById('vgDate').textContent      = data.date || '—';
+      document.getElementById('vgType').textContent      = data.type || '—';
 
-      // Complainant block
-      document.getElementById('vgComplainant').textContent = name || '—';
+      document.getElementById('vgComplainant').textContent = data.name || '—';
       const metaParts = [];
-      if (role)  metaParts.push(role);
-      if (email) metaParts.push(email);
+      if (data.role)  metaParts.push(data.role);
+      if (data.email) metaParts.push(data.email);
       document.getElementById('vgComplainantMeta').textContent = metaParts.length ? metaParts.join(' · ') : '—';
 
-      document.getElementById('vgSubmitted').textContent = date || '—';
-      document.getElementById('vgUpdated').textContent   = updated || '—';
-      document.getElementById('vgAttendee').textContent  = (attendee && attendee.trim() !== '') ? attendee : 'No Data';
+      document.getElementById('vgSubmitted').textContent = data.date || '—';
+      document.getElementById('vgUpdated').textContent   = data.updated || '—';
+      document.getElementById('vgAttendee').textContent  = (data.attendee && data.attendee.trim() !== '') ? data.attendee : 'No Data';
 
       document.getElementById('vgDescription').textContent =
-        (description && description.trim() !== '') ? description : 'No description provided.';
+        (data.description && data.description.trim() !== '') ? data.description : 'No description provided.';
       document.getElementById('vgReply').textContent =
-        (reply && reply.trim() !== '') ? reply : 'No reply yet from the committee.';
+        (data.reply && data.reply.trim() !== '') ? data.reply : 'No reply yet from the committee.';
       document.getElementById('vgFeedback').textContent =
-        (feedback && feedback.trim() !== '') ? feedback : 'No feedback recorded.';
+        (data.feedback && data.feedback.trim() !== '') ? data.feedback : 'No feedback recorded.';
+
+      /* Original attachment */
+      const attWrap = document.getElementById('vgAttachmentWrap');
+      const attView = document.getElementById('vgAttachmentViewBtn');
+      const attDl   = document.getElementById('vgAttachmentDownloadBtn');
+      const attName = document.getElementById('vgAttachmentName');
+      const attMeta = document.getElementById('vgAttachmentMeta');
+
+      if (data.attachment_url && data.attachment_url.trim() !== '') {
+        attWrap.classList.remove('hidden');
+        const nm = filenameFromUrl(data.attachment_url);
+        const ex = (data.attachment_ext || '').toUpperCase();
+        attName.textContent = nm;
+        attMeta.textContent = (ex ? ex + ' • ' : '') + (data.attachment_is_img ? 'Image' : 'Document');
+        attDl.setAttribute('href', data.attachment_url);
+        attDl.setAttribute('download', nm);
+
+        // Replace button to clear previous listeners
+        const newBtn = attView.cloneNode(true);
+        attView.parentNode.replaceChild(newBtn, attView);
+        newBtn.addEventListener('click', function (e) {
+          e.preventDefault(); e.stopPropagation();
+          if (data.attachment_is_img) openLightbox(data.attachment_url, nm);
+          else window.open(data.attachment_url, '_blank', 'noopener');
+        });
+      } else {
+        attWrap.classList.add('hidden');
+      }
+
+      /* Reply attachment */
+      const repWrap = document.getElementById('vgReplyAttachmentWrap');
+      const repView = document.getElementById('vgReplyAttachmentViewBtn');
+      const repDl   = document.getElementById('vgReplyAttachmentDownloadBtn');
+      const repName = document.getElementById('vgReplyAttachmentName');
+      const repMeta = document.getElementById('vgReplyAttachmentMeta');
+
+      if (data.reply_attach_url && data.reply_attach_url.trim() !== '') {
+        repWrap.classList.remove('hidden');
+        const nm = filenameFromUrl(data.reply_attach_url);
+        const ex = (data.reply_attach_ext || '').toUpperCase();
+        repName.textContent = nm;
+        repMeta.textContent = (ex ? ex + ' • ' : '') + (data.reply_attach_is_img ? 'Image' : 'Document');
+        repDl.setAttribute('href', data.reply_attach_url);
+        repDl.setAttribute('download', nm);
+
+        const newBtn = repView.cloneNode(true);
+        repView.parentNode.replaceChild(newBtn, repView);
+        newBtn.addEventListener('click', function (e) {
+          e.preventDefault(); e.stopPropagation();
+          if (data.reply_attach_is_img) openLightbox(data.reply_attach_url, nm);
+          else window.open(data.reply_attach_url, '_blank', 'noopener');
+        });
+      } else {
+        repWrap.classList.add('hidden');
+      }
 
       viewGrievanceModal.classList.remove('hidden');
       document.body.classList.add('overflow-hidden');
-
       if (typeof lucide !== 'undefined') lucide.createIcons();
     }
 
     function closeViewGrievanceModal() {
       if (!viewGrievanceModal) return;
       viewGrievanceModal.classList.add('hidden');
-      document.body.classList.remove('overflow-hidden');
+      const anyOpen = (actionSummaryModal && !actionSummaryModal.classList.contains('hidden'))
+                   || (logoutConfirmModal && !logoutConfirmModal.classList.contains('hidden'))
+                   || (lightbox && !lightbox.classList.contains('hidden'));
+      if (!anyOpen) document.body.classList.remove('overflow-hidden');
     }
 
-    // ============================================================
-    // ACTION SUMMARY MODAL (triggered by the list icon)
-    // ============================================================
+    /* ============================================================
+       ACTION SUMMARY MODAL (renders real rows from grievance_actions)
+       ============================================================ */
     const actionSummaryModal = document.getElementById('actionSummaryModal');
 
-    function openActionSummary(grievanceNumber, subject, date, attendee) {
-      if (!actionSummaryModal) return;
+    function openActionSummary(data) {
+      if (!actionSummaryModal || !data) return;
 
-      const titleEl    = document.getElementById('asTitle');
-      const dateEl     = document.getElementById('asDate');
-      const attendeeEl = document.getElementById('asAttendee');
+      const titleEl  = document.getElementById('asTitle');
+      const listEl   = document.getElementById('asList');
+      const emptyEl  = document.getElementById('asEmpty');
 
-      const bannerText = (subject && subject.trim() !== '')
-        ? grievanceNumber + ' | ' + subject
-        : grievanceNumber;
+      const bannerText = (data.subject && data.subject.trim() !== '')
+        ? data.number + ' | ' + data.subject
+        : data.number;
       titleEl.textContent = bannerText || '—';
 
-      dateEl.textContent     = (date && date.trim() !== '') ? date : 'No Date';
-      attendeeEl.textContent = (attendee && attendee.trim() !== '') ? attendee : 'No Data';
+      const actions = Array.isArray(data.actions) ? data.actions : [];
+
+      if (actions.length === 0) {
+        listEl.innerHTML = '';
+        emptyEl.classList.remove('hidden');
+      } else {
+        emptyEl.classList.add('hidden');
+
+        let html = '';
+        actions.forEach(function (act, idx) {
+          const dt     = escHtml(act.date || '—');
+          const aname  = escHtml(act.attendee_name || '—');
+          const desig  = escHtml(act.attendee_desig || '');
+          const summ   = escHtml(act.summary || '—');
+          const taken  = escHtml(act.action_taken || '—');
+          const by     = escHtml(act.created_by || '');
+
+          html +=
+            '<div class="rounded-xl border border-emerald-200 bg-emerald-50/40 p-4">' +
+              '<div class="flex items-center justify-between gap-2 mb-3 flex-wrap">' +
+                '<div class="flex items-center gap-2">' +
+                  '<span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider border border-emerald-300 bg-white text-emerald-700">Entry ' + (idx + 1) + '</span>' +
+                  '<span class="text-[11px] text-slate-600 flex items-center">' +
+                    '<i data-lucide="calendar" class="w-3.5 h-3.5 mr-1 text-emerald-700"></i>' + dt +
+                  '</span>' +
+                '</div>' +
+                '<span class="text-[11px] text-slate-600 flex items-center">' +
+                  '<i data-lucide="user-check" class="w-3.5 h-3.5 mr-1 text-emerald-700"></i>' +
+                  aname + (desig ? ' — ' + desig : '') +
+                '</span>' +
+              '</div>' +
+              '<div class="mb-2">' +
+                '<p class="text-[10px] uppercase tracking-wider font-bold text-slate-500 mb-0.5">Grievance Summary</p>' +
+                '<p class="text-sm text-slate-800 leading-relaxed whitespace-pre-wrap break-words">' + summ + '</p>' +
+              '</div>' +
+              '<div class="pt-2 border-t border-emerald-200/60">' +
+                '<p class="text-[10px] uppercase tracking-wider font-bold text-slate-500 mb-0.5">Action Taken</p>' +
+                '<p class="text-sm text-slate-800 leading-relaxed whitespace-pre-wrap break-words">' + taken + '</p>' +
+              '</div>' +
+              (by ? '<p class="text-[10px] text-slate-500 mt-2">Submitted by: ' + by + '</p>' : '') +
+            '</div>';
+        });
+        listEl.innerHTML = html;
+      }
 
       actionSummaryModal.classList.remove('hidden');
       document.body.classList.add('overflow-hidden');
-
       if (typeof lucide !== 'undefined') lucide.createIcons();
     }
 
     function closeActionSummary() {
       if (!actionSummaryModal) return;
       actionSummaryModal.classList.add('hidden');
-      document.body.classList.remove('overflow-hidden');
+      const anyOpen = (viewGrievanceModal && !viewGrievanceModal.classList.contains('hidden'))
+                   || (logoutConfirmModal && !logoutConfirmModal.classList.contains('hidden'))
+                   || (lightbox && !lightbox.classList.contains('hidden'));
+      if (!anyOpen) document.body.classList.remove('overflow-hidden');
     }
 
-    // ============================================================
-    // LOGOUT CONFIRMATION MODAL
-    // ============================================================
+    /* ============================================================
+       LOGOUT MODAL
+       ============================================================ */
     const logoutConfirmModal = document.getElementById('logoutConfirmModal');
     const logoutConfirmPanel = document.getElementById('logoutConfirmPanel');
     const confirmLogoutBtn   = document.getElementById('confirmLogoutBtn');
-
     const LOGOUT_URL = '../logout.php?role=admin';
 
     function openLogoutModal() {
       logoutConfirmModal.classList.remove('hidden');
       document.body.classList.add('overflow-hidden');
-
       if (logoutConfirmPanel) {
         logoutConfirmPanel.classList.remove('animate-confirm-shake');
         void logoutConfirmPanel.offsetWidth;
         logoutConfirmPanel.classList.add('animate-confirm-shake');
       }
-
-      setTimeout(function () {
-        if (confirmLogoutBtn) confirmLogoutBtn.focus();
-      }, 80);
-
+      setTimeout(function () { if (confirmLogoutBtn) confirmLogoutBtn.focus(); }, 80);
       if (typeof lucide !== 'undefined') lucide.createIcons();
     }
-
     function closeLogoutModal() {
       logoutConfirmModal.classList.add('hidden');
-      document.body.classList.remove('overflow-hidden');
+      const anyOpen = (viewGrievanceModal && !viewGrievanceModal.classList.contains('hidden'))
+                   || (actionSummaryModal && !actionSummaryModal.classList.contains('hidden'))
+                   || (lightbox && !lightbox.classList.contains('hidden'));
+      if (!anyOpen) document.body.classList.remove('overflow-hidden');
     }
 
-    // Bind both logout triggers
     (function () {
       const triggers = [
         document.getElementById('sidebarLogoutBtn'),
         document.getElementById('dropdownLogoutBtn'),
       ];
-
       triggers.forEach(function (btn) {
         if (!btn) return;
         btn.addEventListener('click', function (e) {
-          e.preventDefault();
-          e.stopPropagation();
+          e.preventDefault(); e.stopPropagation();
           openLogoutModal();
         });
       });
@@ -1258,25 +1465,24 @@ function statusBadgeClass(string $status): string
       });
     }
 
-    // ---- Escape key: close whichever modal is open ----
+    /* Escape key */
     document.addEventListener('keydown', function (e) {
       if (e.key !== 'Escape') return;
+      if (lightbox && !lightbox.classList.contains('hidden')) { closeLightbox(); return; }
       if (viewGrievanceModal && !viewGrievanceModal.classList.contains('hidden')) closeViewGrievanceModal();
       if (actionSummaryModal && !actionSummaryModal.classList.contains('hidden')) closeActionSummary();
       if (logoutConfirmModal && !logoutConfirmModal.classList.contains('hidden')) closeLogoutModal();
     });
 
-    // ---- Entries dropdown: auto-submit the filter form ----
+    /* Entries dropdown — auto-submit */
     (function () {
       const entriesSelect = document.getElementById('entriesPerPage');
       const filterForm    = document.getElementById('filterForm');
       if (!entriesSelect || !filterForm) return;
-      entriesSelect.addEventListener('change', function () {
-        filterForm.submit();
-      });
+      entriesSelect.addEventListener('change', function () { filterForm.submit(); });
     })();
 
-    // ---- Live client-side search + debounced server-side search ----
+    /* Live client-side search + debounced server-side search */
     (function () {
       const searchInput = document.getElementById('searchInput');
       const tableBody   = document.getElementById('grievancesTableBody');

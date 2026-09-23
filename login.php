@@ -19,6 +19,10 @@
  *
  * NOTE: The "staff" URL key maps to BOTH the TEACHER and NON_TEACHING DB roles.
  *       Both staff types share a single login portal and dashboard.
+ *
+ * USERNAME MATCHING:
+ *   Username comparison is CASE-SENSITIVE (uses BINARY). The user must enter
+ *   the username exactly as it was registered — e.g. 'Ajay' ≠ 'ajay'.
  * ---------------------------------------------------------------------------
  */
 
@@ -37,15 +41,13 @@ error_reporting(E_ALL);
 
 // ---------------------------------------------------------------------------
 // ROLE DASHBOARD MAP (single source of truth for redirection)
-//   key   = DB role (UPPERCASE)
-//   value = target dashboard path
 // ---------------------------------------------------------------------------
 $roleDashboardMap = [
     'ADMIN'        => 'admin/dashboard.php',
     'STUDENT'      => 'student/dashboard.php',
     'PARENT'       => 'parent/dashboard.php',
-    'TEACHER'      => 'staff/dashboard.php',      // Unified staff dashboard
-    'NON_TEACHING' => 'staff/dashboard.php',      // Unified staff dashboard
+    'TEACHER'      => 'staff/dashboard.php',
+    'NON_TEACHING' => 'staff/dashboard.php',
     'MANAGEMENT'   => 'management/dashboard.php',
 ];
 
@@ -71,7 +73,6 @@ if (!file_exists($dbFile)) {
 } else {
     require_once $dbFile;
 
-    // Ensure we have a valid mysqli connection
     if (!isset($conn) || !($conn instanceof mysqli)) {
         $conn = @new mysqli('localhost', 'root', '', 'grievance_db');
 
@@ -90,11 +91,7 @@ if (!file_exists($dbFile)) {
 }
 
 // ---------------------------------------------------------------------------
-// 3. ROLE MAP
-//    key    = URL param (lowercase, used in login.php?role=xxx)
-//    value  = full configuration
-//      - 'db_role'       : single string OR array of allowed DB roles
-//      - 'register_page' : dedicated registration page for that role
+// 3. ROLE CONFIG
 // ---------------------------------------------------------------------------
 $roleConfig = [
     'admin' => [
@@ -110,7 +107,7 @@ $roleConfig = [
         'imageDesc'     => 'System Configuration, User Management & Analytics',
         'supportMail'   => 'admin.support@rajagiri.edu',
         'supportTag'    => 'Tech Support',
-        'register_page' => null, // Admin cannot self-register
+        'register_page' => null,
     ],
     'student' => [
         'db_role'       => 'STUDENT',
@@ -132,8 +129,8 @@ $roleConfig = [
         'title'         => 'Parent Portal',
         'subtitle'      => "Monitor Your Ward's Grievances",
         'icon'          => 'users',
-        'placeholder'   => 'Enter your Email',
-        'label'         => 'Parent Email',
+        'placeholder'   => 'Enter your Username',
+        'label'         => 'Parent Username',
         'notice'        => 'For Registered Parents & Guardians',
         'image'         => 'https://images.unsplash.com/photo-1523240795612-9a054b0db644?auto=format&fit=crop&w=800&q=80',
         'imageTitle'    => 'Parent Portal',
@@ -143,7 +140,7 @@ $roleConfig = [
         'register_page' => 'parent_register.php',
     ],
     'staff' => [
-        'db_role'       => ['TEACHER', 'NON_TEACHING'], // Either role logs in here
+        'db_role'       => ['TEACHER', 'NON_TEACHING'],
         'title'         => 'Staff Portal',
         'subtitle'      => 'Teaching & Non-Teaching Staff Access',
         'icon'          => 'briefcase',
@@ -170,11 +167,10 @@ $roleConfig = [
         'imageDesc'     => 'Redressal Committee Oversight & Escalation Management',
         'supportMail'   => 'grievance.committee@rajagiri.edu',
         'supportTag'    => 'Committee Helpdesk',
-        'register_page' => null, // Management cannot self-register
+        'register_page' => null,
     ],
 ];
 
-// Roles allowed to register (by URL key)
 $registrationAllowedRoles = ['student', 'parent', 'staff'];
 
 // ---------------------------------------------------------------------------
@@ -186,7 +182,6 @@ if (!array_key_exists($roleKey, $roleConfig)) {
 }
 $role = $roleConfig[$roleKey];
 
-// Whether this role can register
 $canRegister = in_array($roleKey, $registrationAllowedRoles, true);
 
 // ---------------------------------------------------------------------------
@@ -209,14 +204,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $username = trim((string) ($_POST['username'] ?? ''));
     $password = (string) ($_POST['password'] ?? '');
 
-    // Role from POST, else from GET param
     if (isset($_POST['role']) && array_key_exists($_POST['role'], $roleConfig)) {
         $roleKey = $_POST['role'];
     }
     $role = $roleConfig[$roleKey];
     $canRegister = in_array($roleKey, $registrationAllowedRoles, true);
 
-    // ---- Normalize the allowed DB roles to an array of UPPERCASE strings ----
     $allowedDbRoles = is_array($role['db_role'])
         ? array_map('strtoupper', $role['db_role'])
         : [strtoupper((string) $role['db_role'])];
@@ -238,9 +231,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $errors[] = $dbError ?: 'Database is unavailable. Please try again later.';
         } else {
             try {
+                /*
+                 * CASE-SENSITIVE username match.
+                 * MySQL's default utf8mb4_general_ci collation is case-insensitive,
+                 * so `username = ?` would match 'Ajay', 'ajay', 'AJAY' alike.
+                 * Using BINARY forces a byte-for-byte comparison so the user must
+                 * enter the username exactly as it was registered.
+                 */
                 $sql = "SELECT id, username, password, role, status
                         FROM users
-                        WHERE username = ?
+                        WHERE BINARY username = ?
                         LIMIT 1";
 
                 $stmt = $conn->prepare($sql);
@@ -254,19 +254,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $result = $stmt->get_result();
 
                 if ($result === false || $result->num_rows === 0) {
+                    // Generic message — don't reveal whether the username exists
                     $errors[] = 'Invalid username or password.';
                 } else {
                     $user = $result->fetch_assoc();
 
-                    // Normalize DB values
                     $dbUserRole   = strtoupper((string) ($user['role']   ?? ''));
                     $dbUserStatus = ucfirst(strtolower((string) ($user['status'] ?? '')));
 
-                    // ---- Role match check (supports arrays for unified portals) ----
+                    // ---- Role match check ----
                     if (!in_array($dbUserRole, $allowedDbRoles, true)) {
                         $errors[] = 'Invalid username or password for this portal.';
                     }
-                    // ---- Status check (must be 'Approved') ----
+                    // ---- Status check ----
                     elseif ($dbUserStatus !== 'Approved') {
                         $errors[] = 'Your account status is ' . $dbUserStatus . '. Access is restricted until approved.';
                     }
@@ -287,7 +287,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         $stmt->close();
                         $conn->close();
 
-                        // ---- Redirect to role-specific dashboard ----
                         $targetPath = $roleDashboardMap[$dbUserRole] ?? 'student/dashboard.php';
 
                         header('Location: ' . $targetPath);
@@ -329,13 +328,9 @@ function e(?string $v): string
   <title><?= e($role['title']) ?> — Rajagiri College of Social Sciences</title>
   <link rel="icon" type="image/svg+xml" href="public/favicon.svg" />
 
-  <!-- Tailwind CSS CDN -->
   <script src="https://cdn.tailwindcss.com"></script>
-
-  <!-- Lucide Icons CDN -->
   <script src="https://unpkg.com/lucide@latest"></script>
 
-  <!-- Tailwind Theme Config -->
   <script>
     tailwind.config = {
       theme: {
@@ -351,7 +346,6 @@ function e(?string $v): string
     };
   </script>
 
-  <!-- Local Page CSS -->
   <link rel="stylesheet" href="assets/css/index.css" />
 </head>
 
@@ -450,7 +444,7 @@ function e(?string $v): string
             <?php endif; ?>
 
             <!-- Form -->
-            <form action="login.php?role=<?= e($roleKey) ?>" method="POST" class="space-y-4" novalidate>
+            <form action="login.php?role=<?= e($roleKey) ?>" method="POST" class="space-y-4" novalidate autocomplete="off">
               <input type="hidden" name="csrf_token" value="<?= e($csrfToken) ?>" />
               <input type="hidden" name="role" value="<?= e($roleKey) ?>" />
 
@@ -470,7 +464,10 @@ function e(?string $v): string
                     value="<?= e($loginInput) ?>"
                     placeholder="<?= e($role['placeholder']) ?>"
                     required
-                    autocomplete="username"
+                    autocomplete="off"
+                    autocapitalize="none"
+                    autocorrect="off"
+                    spellcheck="false"
                     class="w-full pl-11 md:pl-12 pr-4 py-3 border-2 border-slate-200 rounded-xl
                            focus:outline-none focus:border-[#8B1E7E] focus:ring-4 focus:ring-[#8B1E7E]/10
                            transition-all duration-300 bg-slate-50/50 focus:bg-white text-slate-900

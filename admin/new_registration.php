@@ -16,7 +16,7 @@
  * Features:
  *   • Lists pending registrations with live search
  *   • Approve single / approve-bulk (checkbox)
- *   • Edit profile details (per role table)
+ *   • View full details (eye icon → modal)
  *   • Delete registration permanently
  *   • Themed modals & flash messages (auto-dismiss after 3 seconds)
  * ---------------------------------------------------------------------------
@@ -25,7 +25,7 @@
 declare(strict_types=1);
 
 // ---------------------------------------------------------------------------
-// 1. SESSION START
+// SESSION START
 // ---------------------------------------------------------------------------
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
@@ -36,7 +36,7 @@ ini_set('display_startup_errors', '0');
 error_reporting(E_ALL);
 
 // ---------------------------------------------------------------------------
-// 2. AUTH GUARD
+// AUTH GUARD
 // ---------------------------------------------------------------------------
 $sessionRole = isset($_SESSION['role']) ? strtoupper((string) $_SESSION['role']) : '';
 
@@ -48,7 +48,7 @@ if (empty($_SESSION['user_id']) || $sessionRole !== 'ADMIN') {
 $userId = (int) $_SESSION['user_id'];
 
 // ---------------------------------------------------------------------------
-// 3. DATABASE CONNECTION
+// DATABASE CONNECTION
 // ---------------------------------------------------------------------------
 $dbFile = __DIR__ . '/../db_connect.php';
 
@@ -77,20 +77,21 @@ if (!file_exists($dbFile)) {
 }
 
 // ---------------------------------------------------------------------------
-// 4. HELPERS
+// HELPERS
 // ---------------------------------------------------------------------------
 function e(?string $v): string
 {
     return htmlspecialchars((string) $v, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
 }
 
-function isValidMobile(string $mobile): bool
+function dash(?string $v): string
 {
-    return (bool) preg_match('/^[0-9]{10}$/', $mobile);
+    $v = trim((string) $v);
+    return $v === '' ? '—' : $v;
 }
 
 // ---------------------------------------------------------------------------
-// 5. FETCH ADMIN PROFILE
+// FETCH ADMIN PROFILE
 // ---------------------------------------------------------------------------
 $adminData = [
     'username'        => $_SESSION['username'] ?? 'Admin',
@@ -144,7 +145,7 @@ if (!empty($adminData['profile_picture'])) {
 }
 
 // ---------------------------------------------------------------------------
-// 6. HANDLE FORM SUBMISSIONS
+// HANDLE FORM SUBMISSIONS
 // ---------------------------------------------------------------------------
 $flashSuccess = '';
 $flashError   = '';
@@ -208,9 +209,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $conn instanceof mysqli) {
     }
 
     // -------- DELETE --------
-    // The FK on students/parents/staff/cell_members is ON DELETE CASCADE,
-    // so deleting from `users` is enough. But we still clean up explicitly
-    // for safety (e.g. if some table lacks cascade).
     if ($action === 'delete_registration') {
         $targetUserId = (int) ($_POST['user_id'] ?? 0);
         if ($targetUserId > 0) {
@@ -244,79 +242,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $conn instanceof mysqli) {
         }
     }
 
-    // -------- EDIT (UPDATE PROFILE) --------
-    if ($action === 'edit_registration') {
-        $targetUserId = (int)    ($_POST['user_id'] ?? 0);
-        $name         = trim((string) ($_POST['name']    ?? ''));
-        $email        = trim((string) ($_POST['email']   ?? ''));
-        $address      = trim((string) ($_POST['address'] ?? ''));
-        $role         = strtoupper(trim((string) ($_POST['role'] ?? '')));
-
-        if ($targetUserId <= 0) {
-            $flashError = 'Invalid registration.';
-        } elseif ($name === '' || $email === '') {
-            $flashError = 'Name and Email are required.';
-        } elseif (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
-            $flashError = 'Please enter a valid email address.';
-        }
-
-        if ($flashError === '') {
-            try {
-                $conn->begin_transaction();
-
-                $updated = false;
-
-                if ($role === 'STUDENT') {
-                    $stmt = $conn->prepare("UPDATE students SET name = ?, email = ?, address = ? WHERE user_id = ?");
-                    $stmt->bind_param('sssi', $name, $email, $address, $targetUserId);
-                    $stmt->execute();
-                    $updated = $stmt->affected_rows >= 0;
-                    $stmt->close();
-                } elseif ($role === 'PARENT') {
-                    $stmt = $conn->prepare("UPDATE parents SET name = ?, email = ? WHERE user_id = ?");
-                    $stmt->bind_param('ssi', $name, $email, $targetUserId);
-                    $stmt->execute();
-                    $updated = $stmt->affected_rows >= 0;
-                    $stmt->close();
-                } elseif ($role === 'TEACHER' || $role === 'NON_TEACHING') {
-                    // Teaching & Non-Teaching staff live in `staff`
-                    $stmt = $conn->prepare("UPDATE staff SET name = ?, email = ? WHERE user_id = ?");
-                    $stmt->bind_param('ssi', $name, $email, $targetUserId);
-                    $stmt->execute();
-                    $updated = $stmt->affected_rows >= 0;
-                    $stmt->close();
-
-                    // Keep cell_members row in sync if one exists (committee member)
-                    $sync = $conn->prepare("UPDATE cell_members SET name = ?, email = ? WHERE user_id = ?");
-                    if ($sync) {
-                        $sync->bind_param('ssi', $name, $email, $targetUserId);
-                        $sync->execute();
-                        $sync->close();
-                    }
-                } else {
-                    // MANAGEMENT (or fallback) — stored in cell_members
-                    $stmt = $conn->prepare("UPDATE cell_members SET name = ?, email = ? WHERE user_id = ?");
-                    $stmt->bind_param('ssi', $name, $email, $targetUserId);
-                    $stmt->execute();
-                    $updated = $stmt->affected_rows >= 0;
-                    $stmt->close();
-                }
-
-                $conn->commit();
-
-                if ($updated) {
-                    $flashSuccess = 'Registration details updated successfully.';
-                } else {
-                    $flashError = 'No changes were saved.';
-                }
-            } catch (Throwable $ex) {
-                if ($conn instanceof mysqli) $conn->rollback();
-                error_log('[Edit Registration] ' . $ex->getMessage());
-                $flashError = 'A system error occurred while updating the registration.';
-            }
-        }
-    }
-
     if ($flashSuccess !== '' || $flashError !== '') {
         $_SESSION['flash_success'] = $flashSuccess;
         $_SESSION['flash_error']   = $flashError;
@@ -335,8 +260,8 @@ if (!empty($_SESSION['flash_error'])) {
 }
 
 // ---------------------------------------------------------------------------
-// 7. FETCH PENDING REGISTRATIONS
-//    Resolve profile details across students / parents / staff / cell_members.
+// FETCH PENDING REGISTRATIONS
+//    Pull every role-specific column so the View modal can show full details.
 // ---------------------------------------------------------------------------
 $registrations = [];
 
@@ -346,14 +271,65 @@ if ($conn instanceof mysqli) {
                         u.username,
                         u.role,
                         u.status,
+                        u.created_at AS user_created_at,
+
+                        -- Unified main fields
                         COALESCE(s.name,   p.name,   st.name,   cm.name)   AS name,
                         COALESCE(s.email,  p.email,  st.email,  cm.email)  AS email,
-                        COALESCE(s.address, 'N/A')                          AS address
+                        COALESCE(s.address, p.address, st.address, cm.address) AS address,
+
+                        -- STUDENT fields
+                        s.admission_number          AS student_admission_number,
+                        s.contact_number            AS student_contact_number,
+                        s.whatsapp_number           AS student_whatsapp_number,
+                        s.guardian_name             AS student_guardian_name,
+                        s.profile_image             AS student_profile_image,
+                        s.class_id                  AS student_class_id,
+                        cls.class_name              AS student_class_name,
+                        crs.course_name             AS student_course_name,
+
+                        -- PARENT fields
+                        p.contact_number            AS parent_contact_number,
+                        p.whatsapp_number           AS parent_whatsapp_number,
+                        p.relation                  AS parent_relation,
+                        p.profile_image             AS parent_profile_image,
+
+                        -- STAFF fields
+                        st.gender                   AS staff_gender,
+                        st.contact_number           AS staff_contact_number,
+                        st.whatsapp_number          AS staff_whatsapp_number,
+                        st.employee_id              AS staff_employee_id,
+                        st.staff_type               AS staff_staff_type,
+                        st.profile_image            AS staff_profile_image,
+                        st_des.designation_name     AS staff_designation_name,
+                        st_dept.department_name     AS staff_department_name,
+
+                        -- CELL MEMBER / MANAGEMENT fields
+                        cm.member_type              AS cm_member_type,
+                        cm.mobile_number            AS cm_mobile_number,
+                        cm.whatsapp_number          AS cm_whatsapp_number,
+                        cm.profile_image            AS cm_profile_image,
+                        cm.grievance_type_id        AS cm_grievance_type_id,
+                        cm_des.designation_name     AS cm_designation_name,
+                        cm_dept.department_name     AS cm_department_name,
+                        cm_gt.type_name             AS cm_grievance_type_name
+
                 FROM users u
-                LEFT JOIN students     s  ON u.id = s.user_id
-                LEFT JOIN parents      p  ON u.id = p.user_id
-                LEFT JOIN staff        st ON u.id = st.user_id
-                LEFT JOIN cell_members cm ON u.id = cm.user_id
+                LEFT JOIN students       s      ON u.id = s.user_id
+                LEFT JOIN classes        cls    ON cls.id = s.class_id
+                LEFT JOIN courses        crs    ON crs.id = cls.course_id
+
+                LEFT JOIN parents        p      ON u.id = p.user_id
+
+                LEFT JOIN staff          st     ON u.id = st.user_id
+                LEFT JOIN designations   st_des ON st_des.id = st.designation_id
+                LEFT JOIN departments    st_dept ON st_dept.id = st.department_id
+
+                LEFT JOIN cell_members   cm     ON u.id = cm.user_id
+                LEFT JOIN designations   cm_des ON cm_des.id = cm.designation_id
+                LEFT JOIN departments    cm_dept ON cm_dept.id = cm.department_id
+                LEFT JOIN grievance_types cm_gt ON cm_gt.id = cm.grievance_type_id
+
                 WHERE u.status = 'Pending'
                 ORDER BY u.id DESC";
 
@@ -523,7 +499,6 @@ if ($conn instanceof mysqli) {
               </nav>
             </div>
 
-            <!-- Approve All Checked Button -->
             <button type="button"
                     onclick="approveChecked()"
                     title="Approve Selected Registrations"
@@ -619,6 +594,59 @@ if ($conn instanceof mysqli) {
                           $regEmail  = (string) ($reg['email']   ?? 'N/A');
                           $regAddr   = (string) ($reg['address'] ?? 'N/A');
                           $regRole   = (string) ($reg['role']    ?? '');
+
+                          // Build a compact, role-aware payload for the View modal
+                          $viewPayload = [
+                              'user_id'    => $regUserId,
+                              'username'   => (string) ($reg['username'] ?? ''),
+                              'role'       => $regRole,
+                              'status'     => (string) ($reg['status'] ?? ''),
+                              'created_at' => (string) ($reg['user_created_at'] ?? ''),
+                              'name'       => $regName,
+                              'email'      => $regEmail,
+                              'address'    => $regAddr,
+                          ];
+
+                          if ($regRole === 'STUDENT') {
+                              $viewPayload['student'] = [
+                                  'admission_number' => (string) ($reg['student_admission_number'] ?? ''),
+                                  'class_name'       => (string) ($reg['student_class_name']       ?? ''),
+                                  'course_name'      => (string) ($reg['student_course_name']      ?? ''),
+                                  'contact_number'   => (string) ($reg['student_contact_number']   ?? ''),
+                                  'whatsapp_number'  => (string) ($reg['student_whatsapp_number']  ?? ''),
+                                  'guardian_name'    => (string) ($reg['student_guardian_name']    ?? ''),
+                                  'profile_image'    => (string) ($reg['student_profile_image']    ?? ''),
+                              ];
+                          } elseif ($regRole === 'PARENT') {
+                              $viewPayload['parent'] = [
+                                  'contact_number'  => (string) ($reg['parent_contact_number']   ?? ''),
+                                  'whatsapp_number' => (string) ($reg['parent_whatsapp_number']  ?? ''),
+                                  'relation'        => (string) ($reg['parent_relation']         ?? ''),
+                                  'profile_image'   => (string) ($reg['parent_profile_image']    ?? ''),
+                              ];
+                          } elseif ($regRole === 'TEACHER' || $regRole === 'NON_TEACHING') {
+                              $viewPayload['staff'] = [
+                                  'gender'            => (string) ($reg['staff_gender']           ?? ''),
+                                  'contact_number'    => (string) ($reg['staff_contact_number']   ?? ''),
+                                  'whatsapp_number'   => (string) ($reg['staff_whatsapp_number']  ?? ''),
+                                  'employee_id'       => (string) ($reg['staff_employee_id']      ?? ''),
+                                  'staff_type'        => (string) ($reg['staff_staff_type']       ?? ''),
+                                  'designation_name'  => (string) ($reg['staff_designation_name'] ?? ''),
+                                  'department_name'   => (string) ($reg['staff_department_name']  ?? ''),
+                                  'profile_image'     => (string) ($reg['staff_profile_image']    ?? ''),
+                              ];
+                          } else {
+                              // MANAGEMENT (or fallback) → cell_members
+                              $viewPayload['member'] = [
+                                  'member_type'         => (string) ($reg['cm_member_type']           ?? ''),
+                                  'mobile_number'       => (string) ($reg['cm_mobile_number']         ?? ''),
+                                  'whatsapp_number'     => (string) ($reg['cm_whatsapp_number']       ?? ''),
+                                  'designation_name'    => (string) ($reg['cm_designation_name']      ?? ''),
+                                  'department_name'     => (string) ($reg['cm_department_name']       ?? ''),
+                                  'grievance_type_name' => (string) ($reg['cm_grievance_type_name']   ?? ''),
+                                  'profile_image'       => (string) ($reg['cm_profile_image']         ?? ''),
+                              ];
+                          }
                         ?>
                         <tr class="hover:bg-slate-50/80 transition-colors group">
                           <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-slate-900"><?= $index + 1 ?></td>
@@ -635,20 +663,21 @@ if ($conn instanceof mysqli) {
                           <td class="px-6 py-4 whitespace-nowrap">
                             <div class="flex items-center justify-center gap-2">
 
+                              <!-- View -->
+                              <button type="button"
+                                      title="View details"
+                                      data-view-trigger="1"
+                                      data-user='<?= e(json_encode($viewPayload, JSON_HEX_APOS | JSON_HEX_QUOT)) ?>'
+                                      class="w-9 h-9 rounded-full bg-purple-50 hover:bg-[#4A154B] flex items-center justify-center text-[#4A154B] hover:text-white transition-all duration-200 hover:scale-110">
+                                <i data-lucide="eye" class="w-4 h-4 pointer-events-none"></i>
+                              </button>
+
                               <!-- Approve Single -->
                               <button type="button"
                                       title="Approve this registration"
                                       onclick='confirmApprove(<?= $regUserId ?>, <?= json_encode($regName) ?>)'
                                       class="w-9 h-9 rounded-full bg-purple-50 hover:bg-[#4A154B] flex items-center justify-center text-[#4A154B] hover:text-white transition-all duration-200 hover:scale-110">
                                 <i data-lucide="check" class="w-4 h-4"></i>
-                              </button>
-
-                              <!-- Edit -->
-                              <button type="button"
-                                      title="Edit registration"
-                                      onclick='openEditModal(<?= $regUserId ?>, <?= json_encode($regName) ?>, <?= json_encode($regEmail) ?>, <?= json_encode($regAddr) ?>, <?= json_encode($regRole) ?>)'
-                                      class="w-9 h-9 rounded-full bg-purple-50 hover:bg-[#4A154B] flex items-center justify-center text-[#4A154B] hover:text-white transition-all duration-200 hover:scale-110">
-                                <i data-lucide="pencil" class="w-4 h-4"></i>
                               </button>
 
                               <!-- Delete -->
@@ -710,65 +739,66 @@ if ($conn instanceof mysqli) {
   </div>
 
   <!-- ============================================================
-       EDIT REGISTRATION MODAL
+       VIEW DETAILS MODAL
        ============================================================ -->
-  <div id="editModal" class="hidden fixed inset-0 z-[60] flex items-center justify-center p-4">
-    <div class="absolute inset-0 bg-black/40 backdrop-blur-sm" onclick="closeEditModal()"></div>
+  <div id="viewDetailsModal" class="hidden fixed inset-0 z-[60] flex items-center justify-center p-4">
+    <div class="absolute inset-0 bg-black/40 backdrop-blur-sm" onclick="closeViewModal()"></div>
 
-    <div class="relative w-full max-w-lg bg-white rounded-2xl shadow-2xl animate-modal-in overflow-hidden">
+    <div class="relative w-full max-w-2xl bg-white rounded-2xl shadow-2xl animate-modal-in overflow-hidden max-h-[90vh] flex flex-col">
       <div class="h-1.5 w-full bg-gradient-to-r from-[#6A2C8A] via-[#8B1E7E] to-[#C43A7A]"></div>
 
       <div class="flex items-center justify-between px-6 py-4 border-b border-slate-100">
-        <h3 class="text-lg font-bold text-slate-800">Edit Registration</h3>
-        <button type="button" onclick="closeEditModal()" class="w-8 h-8 rounded-lg hover:bg-slate-100 flex items-center justify-center text-slate-500 transition-colors">
+        <h3 class="text-lg font-bold text-slate-800">Registration Details</h3>
+        <button type="button" onclick="closeViewModal()" class="w-8 h-8 rounded-lg hover:bg-slate-100 flex items-center justify-center text-slate-500 transition-colors">
           <i data-lucide="x" class="w-5 h-5"></i>
         </button>
       </div>
 
-      <form id="editForm" method="POST" action="new_registration.php" class="p-6 space-y-4">
-        <input type="hidden" name="action" value="edit_registration" />
-        <input type="hidden" name="user_id" id="editUserId" value="" />
-        <input type="hidden" name="role"    id="editRole"   value="" />
+      <div class="p-6 overflow-y-auto flex-1 space-y-5">
 
-        <div class="space-y-2">
-          <label for="editName" class="block text-sm font-semibold text-slate-700">Full Name <span class="text-[#E5097F]">*</span></label>
-          <input type="text" name="name" id="editName" required
-                 class="w-full px-4 py-3 border-2 border-slate-200 rounded-xl bg-white text-slate-800 font-medium
-                        placeholder-slate-400
-                        focus:outline-none focus:border-[#4A154B] focus:ring-4 focus:ring-[#4A154B]/10
-                        hover:border-[#4A154B]/40 transition-all" />
+        <!-- Header card -->
+        <div class="flex items-start space-x-4 pb-4 border-b border-slate-100">
+          <div id="viewAvatar" class="w-16 h-16 rounded-full bg-gradient-to-br from-[#4A154B] to-[#8B1E7E] flex items-center justify-center text-white shadow-md flex-shrink-0 overflow-hidden">
+            <i data-lucide="user" class="w-8 h-8"></i>
+          </div>
+          <div class="min-w-0 flex-1">
+            <p id="viewName" class="text-lg font-bold text-slate-800 break-words">—</p>
+            <p id="viewEmail" class="text-sm text-slate-500 break-words">—</p>
+            <div class="mt-2 flex flex-wrap items-center gap-2">
+              <span id="viewRoleBadge" class="inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider border border-purple-200 bg-purple-50 text-[#4A154B]">—</span>
+              <span id="viewStatusBadge" class="inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider border border-amber-200 bg-amber-50 text-amber-800">—</span>
+            </div>
+          </div>
         </div>
 
-        <div class="space-y-2">
-          <label for="editEmail" class="block text-sm font-semibold text-slate-700">Email <span class="text-[#E5097F]">*</span></label>
-          <input type="email" name="email" id="editEmail" required
-                 class="w-full px-4 py-3 border-2 border-slate-200 rounded-xl bg-white text-slate-800 font-medium
-                        placeholder-slate-400
-                        focus:outline-none focus:border-[#4A154B] focus:ring-4 focus:ring-[#4A154B]/10
-                        hover:border-[#4A154B]/40 transition-all" />
+        <!-- Common details -->
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div class="bg-slate-50 rounded-xl p-3 border border-slate-100">
+            <p class="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1">Username</p>
+            <p id="viewUsername" class="text-sm font-semibold text-slate-800 break-words">—</p>
+          </div>
+          <div class="bg-slate-50 rounded-xl p-3 border border-slate-100">
+            <p class="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1">Registered On</p>
+            <p id="viewCreatedAt" class="text-sm font-semibold text-slate-800">—</p>
+          </div>
         </div>
 
-        <div class="space-y-2" id="editAddressWrapper">
-          <label for="editAddress" class="block text-sm font-semibold text-slate-700">Address</label>
-          <textarea name="address" id="editAddress" rows="2"
-                    placeholder="e.g. Kochi, Kerala"
-                    class="w-full px-4 py-3 border-2 border-slate-200 rounded-xl bg-white text-slate-800 font-medium
-                           placeholder-slate-400 resize-none
-                           focus:outline-none focus:border-[#4A154B] focus:ring-4 focus:ring-[#4A154B]/10
-                           hover:border-[#4A154B]/40 transition-all"></textarea>
+        <div class="bg-slate-50 rounded-xl p-3 border border-slate-100">
+          <p class="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1">Address</p>
+          <p id="viewAddress" class="text-sm text-slate-700 break-words whitespace-pre-line">—</p>
         </div>
 
-        <div class="flex justify-center pt-3 gap-3">
-          <button type="button" onclick="closeEditModal()"
-                  class="px-6 py-3 rounded-xl font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-200 transition-all duration-200 active:scale-95">
-            Cancel
-          </button>
-          <button type="submit"
-                  class="px-8 py-3 rounded-xl bg-gradient-to-r from-[#6A2C8A] via-[#8B1E7E] to-[#C43A7A] hover:from-[#5A1C7A] hover:via-[#7B0E6E] hover:to-[#B42A6A] text-white font-bold shadow-lg shadow-purple-500/30 hover:shadow-purple-500/50 transition-all duration-300 hover:-translate-y-0.5 active:scale-95">
-            Save Changes
-          </button>
-        </div>
-      </form>
+        <!-- Role-specific section (rendered dynamically) -->
+        <div id="viewRoleSection"></div>
+
+      </div>
+
+      <div class="px-6 py-4 bg-slate-50 border-t border-slate-100 flex justify-end">
+        <button type="button" onclick="closeViewModal()"
+                class="px-5 py-2.5 rounded-xl font-semibold text-slate-700 bg-white hover:bg-slate-100 border border-slate-200 transition-all duration-200 active:scale-95">
+          Close
+        </button>
+      </div>
     </div>
   </div>
 
@@ -924,35 +954,151 @@ if ($conn instanceof mysqli) {
       if (form) form.submit();
     }
 
-    // ---- Edit Modal ----
-    const editModal = document.getElementById('editModal');
-    const editUserId = document.getElementById('editUserId');
-    const editRole = document.getElementById('editRole');
-    const editName = document.getElementById('editName');
-    const editEmail = document.getElementById('editEmail');
-    const editAddress = document.getElementById('editAddress');
-    const editAddressWrapper = document.getElementById('editAddressWrapper');
+    // ---- Helpers ----
+    function escapeHtml(str) {
+      return String(str == null ? '' : str)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+    function dash(v) {
+      const s = (v == null) ? '' : String(v).trim();
+      return s === '' ? '—' : s;
+    }
+    function formatDate(yyyymmdd) {
+      if (!yyyymmdd) return '—';
+      const d = new Date(String(yyyymmdd).replace(' ', 'T'));
+      if (isNaN(d.getTime())) return String(yyyymmdd);
+      const pad = n => String(n).padStart(2, '0');
+      return pad(d.getDate()) + '-' + pad(d.getMonth() + 1) + '-' + d.getFullYear()
+           + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+    }
+    function kv(label, value) {
+      return '<div class="bg-slate-50 rounded-xl p-3 border border-slate-100">'
+           +   '<p class="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1">' + escapeHtml(label) + '</p>'
+           +   '<p class="text-sm font-semibold text-slate-800 break-words">' + escapeHtml(dash(value)) + '</p>'
+           + '</div>';
+    }
 
-    function openEditModal(userId, name, email, address, role) {
-      editModal.classList.remove('hidden');
-      editUserId.value = userId || '';
-      editRole.value = role || '';
-      editName.value = name || '';
-      editEmail.value = email || '';
-      editAddress.value = (address && address !== 'N/A') ? address : '';
+    // ---- View Details Modal ----
+    const viewDetailsModal = document.getElementById('viewDetailsModal');
+    const viewRoleSection  = document.getElementById('viewRoleSection');
 
-      // Address only applies to STUDENT role
-      if (editAddressWrapper) {
-        editAddressWrapper.style.display = (role === 'STUDENT') ? '' : 'none';
+    function renderRoleSection(data) {
+      const role = (data.role || '').toUpperCase();
+
+      let html = '';
+
+      if (role === 'STUDENT' && data.student) {
+        const s = data.student;
+        html += '<div class="grid grid-cols-1 sm:grid-cols-2 gap-4">'
+             +    kv('Admission Number', s.admission_number)
+             +    kv('Course',          s.course_name)
+             +    kv('Class / Semester', s.class_name)
+             +    kv('Guardian Name',   s.guardian_name)
+             +    kv('Contact Number',  s.contact_number)
+             +    kv('WhatsApp Number', s.whatsapp_number)
+             +  '</div>';
+      } else if (role === 'PARENT' && data.parent) {
+        const p = data.parent;
+        html += '<div class="grid grid-cols-1 sm:grid-cols-2 gap-4">'
+             +    kv('Relation',        p.relation)
+             +    kv('Contact Number',  p.contact_number)
+             +    kv('WhatsApp Number', p.whatsapp_number)
+             +  '</div>';
+      } else if ((role === 'TEACHER' || role === 'NON_TEACHING') && data.staff) {
+        const st = data.staff;
+        html += '<div class="grid grid-cols-1 sm:grid-cols-2 gap-4">'
+             +    kv('Employee ID',    st.employee_id)
+             +    kv('Staff Type',     st.staff_type)
+             +    kv('Gender',         st.gender)
+             +    kv('Designation',    st.designation_name)
+             +    kv('Department',     st.department_name)
+             +    kv('Contact Number', st.contact_number)
+             +    kv('WhatsApp Number', st.whatsapp_number)
+             +  '</div>';
+      } else if (data.member) {
+        const m = data.member;
+        html += '<div class="grid grid-cols-1 sm:grid-cols-2 gap-4">'
+             +    kv('Member Type',      m.member_type)
+             +    kv('Designation',      m.designation_name)
+             +    kv('Department',       m.department_name)
+             +    kv('Grievance Type',   m.grievance_type_name)
+             +    kv('Mobile Number',    m.mobile_number)
+             +    kv('WhatsApp Number',  m.whatsapp_number)
+             +  '</div>';
       }
 
-      setTimeout(() => editName && editName.focus(), 50);
+      viewRoleSection.innerHTML = html;
+    }
+
+    function openViewModal(data) {
+      if (!data) return;
+
+      document.getElementById('viewName').textContent     = dash(data.name);
+      document.getElementById('viewEmail').textContent    = dash(data.email);
+      document.getElementById('viewUsername').textContent = dash(data.username);
+      document.getElementById('viewAddress').textContent  = dash(data.address);
+      document.getElementById('viewCreatedAt').textContent = formatDate(data.created_at);
+
+      // Role badge
+      const roleBadge = document.getElementById('viewRoleBadge');
+      roleBadge.textContent = dash(data.role);
+
+      // Status badge
+      const statusBadge = document.getElementById('viewStatusBadge');
+      const st = (data.status || '').toLowerCase();
+      statusBadge.className = 'inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider border ' +
+        (st === 'pending'   ? 'border-amber-200 bg-amber-50 text-amber-800'
+        : st === 'approved' ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+        : st === 'rejected' ? 'border-rose-200 bg-rose-50 text-rose-800'
+                            : 'border-slate-200 bg-slate-50 text-slate-700');
+      statusBadge.textContent = dash(data.status);
+
+      // Avatar (role-aware)
+      const avatarDiv = document.getElementById('viewAvatar');
+      let avatarUrl = '';
+      if (data.role === 'STUDENT' && data.student)  avatarUrl = data.student.profile_image || '';
+      if (data.role === 'PARENT'  && data.parent)   avatarUrl = data.parent.profile_image  || '';
+      if ((data.role === 'TEACHER' || data.role === 'NON_TEACHING') && data.staff) avatarUrl = data.staff.profile_image || '';
+      if (data.member) avatarUrl = data.member.profile_image || '';
+
+      avatarDiv.innerHTML = '';
+      if (avatarUrl) {
+        const img = document.createElement('img');
+        img.src = '../' + String(avatarUrl).replace(/^\/+/, '');
+        img.alt = data.name || 'User';
+        img.className = 'w-full h-full object-cover';
+        img.onerror = function () {
+          avatarDiv.innerHTML = '<i data-lucide="user" class="w-8 h-8"></i>';
+          if (typeof lucide !== 'undefined') lucide.createIcons({ targets: [avatarDiv] });
+        };
+        avatarDiv.appendChild(img);
+      } else {
+        avatarDiv.innerHTML = '<i data-lucide="user" class="w-8 h-8"></i>';
+      }
+
+      renderRoleSection(data);
+
+      viewDetailsModal.classList.remove('hidden');
+      document.body.classList.add('overflow-hidden');
       if (typeof lucide !== 'undefined') lucide.createIcons();
     }
-    function closeEditModal() {
-      editModal.classList.add('hidden');
-      document.getElementById('editForm').reset();
+
+    function closeViewModal() {
+      viewDetailsModal.classList.add('hidden');
+      document.body.classList.remove('overflow-hidden');
+      viewRoleSection.innerHTML = '';
     }
+
+    // Delegated handler for eye buttons
+    document.addEventListener('click', function (e) {
+      const btn = e.target.closest('[data-view-trigger="1"]');
+      if (!btn) return;
+      e.preventDefault();
+      const raw = btn.getAttribute('data-user');
+      if (!raw) return;
+      try { openViewModal(JSON.parse(raw)); } catch (err) { console.error(err); }
+    });
 
     // ---- Approve Modal ----
     const approveConfirmModal = document.getElementById('approveConfirmModal');
@@ -1026,7 +1172,7 @@ if ($conn instanceof mysqli) {
     // ---- Escape closes any open modal ----
     document.addEventListener('keydown', function (e) {
       if (e.key !== 'Escape') return;
-      if (editModal && !editModal.classList.contains('hidden')) closeEditModal();
+      if (viewDetailsModal && !viewDetailsModal.classList.contains('hidden')) closeViewModal();
       if (approveConfirmModal && !approveConfirmModal.classList.contains('hidden')) closeApproveModal();
       if (deleteConfirmModal && !deleteConfirmModal.classList.contains('hidden')) closeDeleteModal();
     });

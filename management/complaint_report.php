@@ -33,7 +33,7 @@ $userId = (int) $_SESSION['user_id'];
 // ---------------------------------------------------------------------------
 // DATABASE
 // ---------------------------------------------------------------------------
-$dbFile = __DIR__ . '/../db_connect.php';
+$dbFile  = __DIR__ . '/../db_connect.php';
 $dbError = null;
 $conn    = null;
 
@@ -71,6 +71,14 @@ function isValidDate(string $d): bool
     if ($d === '') return false;
     $dt = DateTime::createFromFormat('Y-m-d', $d);
     return $dt && $dt->format('Y-m-d') === $d;
+}
+
+function findName(array $list, int $id, string $key): string
+{
+    foreach ($list as $item) {
+        if ((int) $item['id'] === $id) return (string) $item[$key];
+    }
+    return 'All';
 }
 
 // ---------------------------------------------------------------------------
@@ -150,69 +158,7 @@ if (!empty($memberData['profile_image'])) {
 }
 
 // ---------------------------------------------------------------------------
-// DROPDOWN OPTIONS
-// ---------------------------------------------------------------------------
-$grievanceTypes = [];
-$cellMembers    = [];
-$courses        = [];
-$classes        = [];
-$departments    = [];
-$designations   = [];
-
-if ($conn instanceof mysqli) {
-    try {
-        if ($isManagement) {
-            $res = $conn->query("SELECT id, type_name FROM grievance_types WHERE status = 'Active' ORDER BY type_name ASC");
-        } elseif ($hasTypeAssignment) {
-            $stmt = $conn->prepare("SELECT id, type_name FROM grievance_types WHERE status = 'Active' AND id = ? ORDER BY type_name ASC");
-            if ($stmt) {
-                $stmt->bind_param('i', $memberGrievanceTypeId);
-                $stmt->execute();
-                $res = $stmt->get_result();
-            } else {
-                $res = false;
-            }
-        } else {
-            $res = false;
-        }
-        if ($res) {
-            while ($row = $res->fetch_assoc()) $grievanceTypes[] = $row;
-            $res->free();
-        }
-        if (isset($stmt) && $stmt instanceof mysqli_stmt) {
-            $stmt->close();
-            $stmt = null;
-        }
-    } catch (Throwable $ex) { error_log('[Fetch Grievance Types] ' . $ex->getMessage()); }
-
-    try {
-        $res = $conn->query("SELECT id, name FROM cell_members ORDER BY name ASC");
-        if ($res) while ($row = $res->fetch_assoc()) $cellMembers[] = $row;
-    } catch (Throwable $ex) { error_log('[Fetch Cell Members] ' . $ex->getMessage()); }
-
-    try {
-        $res = $conn->query("SELECT id, course_name FROM courses WHERE status = 'Active' ORDER BY course_name ASC");
-        if ($res) while ($row = $res->fetch_assoc()) $courses[] = $row;
-    } catch (Throwable $ex) { error_log('[Fetch Courses] ' . $ex->getMessage()); }
-
-    try {
-        $res = $conn->query("SELECT id, class_name FROM classes WHERE status = 'Active' ORDER BY class_name ASC");
-        if ($res) while ($row = $res->fetch_assoc()) $classes[] = $row;
-    } catch (Throwable $ex) { error_log('[Fetch Classes] ' . $ex->getMessage()); }
-
-    try {
-        $res = $conn->query("SELECT id, department_name FROM departments WHERE status = 'Active' ORDER BY department_name ASC");
-        if ($res) while ($row = $res->fetch_assoc()) $departments[] = $row;
-    } catch (Throwable $ex) { error_log('[Fetch Departments] ' . $ex->getMessage()); }
-
-    try {
-        $res = $conn->query("SELECT id, designation_name FROM designations WHERE status = 'Active' ORDER BY designation_name ASC");
-        if ($res) while ($row = $res->fetch_assoc()) $designations[] = $row;
-    } catch (Throwable $ex) { error_log('[Fetch Designations] ' . $ex->getMessage()); }
-}
-
-// ---------------------------------------------------------------------------
-// FILTERS
+// FILTERS (read GET)
 // ---------------------------------------------------------------------------
 $today       = date('Y-m-d');
 $defaultFrom = date('Y-m-d', strtotime('-30 days'));
@@ -242,12 +188,122 @@ if (strtotime($filterFrom) > strtotime($filterTo)) {
 $isSubmitted = isset($_GET['submit']) && (string) $_GET['submit'] === '1';
 
 // ---------------------------------------------------------------------------
+// DROPDOWN OPTIONS
+// ---------------------------------------------------------------------------
+$grievanceTypes = [];
+$cellMembers    = [];
+$courses        = [];
+$classes        = [];
+$departments    = [];
+$designations   = [];
+
+if ($conn instanceof mysqli) {
+    // Grievance Types (scoped for non-management)
+    try {
+        if ($isManagement) {
+            $res = $conn->query("SELECT id, type_name FROM grievance_types WHERE status = 'Active' ORDER BY type_name ASC");
+        } elseif ($hasTypeAssignment) {
+            $stmt = $conn->prepare("SELECT id, type_name FROM grievance_types WHERE status = 'Active' AND id = ? ORDER BY type_name ASC");
+            if ($stmt) {
+                $stmt->bind_param('i', $memberGrievanceTypeId);
+                $stmt->execute();
+                $res = $stmt->get_result();
+            } else {
+                $res = false;
+            }
+        } else {
+            $res = false;
+        }
+        if ($res) {
+            while ($row = $res->fetch_assoc()) $grievanceTypes[] = $row;
+            $res->free();
+        }
+        if (isset($stmt) && $stmt instanceof mysqli_stmt) {
+            $stmt->close();
+            $stmt = null;
+        }
+    } catch (Throwable $ex) { error_log('[Fetch Grievance Types] ' . $ex->getMessage()); }
+
+    // Cell Members (only those who actually attended grievances, to keep list meaningful)
+    try {
+        $res = $conn->query(
+            "SELECT DISTINCT cm.id, cm.name
+             FROM cell_members cm
+             INNER JOIN grievances g ON g.attended_by = cm.id
+             ORDER BY cm.name ASC"
+        );
+        if ($res) while ($row = $res->fetch_assoc()) $cellMembers[] = $row;
+    } catch (Throwable $ex) { error_log('[Fetch Cell Members] ' . $ex->getMessage()); }
+
+    // Courses
+    try {
+        $res = $conn->query("SELECT id, course_name FROM courses WHERE status = 'Active' ORDER BY course_name ASC");
+        if ($res) while ($row = $res->fetch_assoc()) $courses[] = $row;
+    } catch (Throwable $ex) { error_log('[Fetch Courses] ' . $ex->getMessage()); }
+
+    // Classes — cascade to selected course
+    try {
+        if ($filterCourse > 0) {
+            $stmt = $conn->prepare(
+                "SELECT id, class_name FROM classes
+                 WHERE status = 'Active' AND course_id = ?
+                 ORDER BY class_name ASC"
+            );
+            if ($stmt) {
+                $stmt->bind_param('i', $filterCourse);
+                $stmt->execute();
+                $res = $stmt->get_result();
+            } else {
+                $res = false;
+            }
+        } else {
+            $res = $conn->query("SELECT id, class_name FROM classes WHERE status = 'Active' ORDER BY class_name ASC");
+        }
+        if ($res) {
+            while ($row = $res->fetch_assoc()) $classes[] = $row;
+            $res->free();
+        }
+        if (isset($stmt) && $stmt instanceof mysqli_stmt) {
+            $stmt->close();
+            $stmt = null;
+        }
+    } catch (Throwable $ex) { error_log('[Fetch Classes] ' . $ex->getMessage()); }
+
+    // Departments — cascade to selected member if chosen
+    try {
+        if ($filterMember > 0) {
+            $res = $conn->query(
+                "SELECT d.id, d.department_name
+                 FROM departments d
+                 WHERE d.status = 'Active'
+                 ORDER BY d.department_name ASC"
+            );
+        } else {
+            $res = $conn->query(
+                "SELECT d.id, d.department_name
+                 FROM departments d
+                 WHERE d.status = 'Active'
+                 ORDER BY d.department_name ASC"
+            );
+        }
+        if ($res) while ($row = $res->fetch_assoc()) $departments[] = $row;
+    } catch (Throwable $ex) { error_log('[Fetch Departments] ' . $ex->getMessage()); }
+
+    // Designations
+    try {
+        $res = $conn->query("SELECT id, designation_name FROM designations WHERE status = 'Active' ORDER BY designation_name ASC");
+        if ($res) while ($row = $res->fetch_assoc()) $designations[] = $row;
+    } catch (Throwable $ex) { error_log('[Fetch Designations] ' . $ex->getMessage()); }
+}
+
+// ---------------------------------------------------------------------------
 // REPORT QUERY
 // ---------------------------------------------------------------------------
 $rows = [];
 
 if ($isSubmitted && $canViewAnything && $conn instanceof mysqli) {
     try {
+        // Base query — one row per grievance
         $sql = "SELECT  g.id,
                         g.grievance_number,
                         g.subject,
@@ -276,6 +332,7 @@ if ($isSubmitted && $canViewAnything && $conn instanceof mysqli) {
         $params = [$filterFrom, $filterTo];
         $types  = 'ss';
 
+        // Grievance type — management can pick; members are scoped
         if (!$isManagement) {
             $sql .= " AND g.grievance_type_id = ?";
             $params[] = $memberGrievanceTypeId;
@@ -286,36 +343,42 @@ if ($isSubmitted && $canViewAnything && $conn instanceof mysqli) {
             $types   .= 'i';
         }
 
+        // Grievance member — filter on attended_by (assigned_member_id is rarely used)
         if ($filterMember > 0) {
-            $sql .= " AND g.assigned_member_id = ?";
+            $sql .= " AND g.attended_by = ?";
             $params[] = $filterMember;
             $types   .= 'i';
         }
 
+        // Course — restrict to students whose class belongs to the course
         if ($filterCourse > 0) {
             $sql .= " AND s.class_id IN (SELECT id FROM classes WHERE course_id = ?)";
             $params[] = $filterCourse;
             $types   .= 'i';
         }
 
+        // Class
         if ($filterClass > 0) {
             $sql .= " AND s.class_id = ?";
             $params[] = $filterClass;
             $types   .= 'i';
         }
 
+        // Department — target attending cell member's department
         if ($filterDepartment > 0) {
-            $sql .= " AND cm.department_id = ?";
+            $sql .= " AND att_cm.department_id = ?";
             $params[] = $filterDepartment;
             $types   .= 'i';
         }
 
+        // Designation — target attending cell member's designation
         if ($filterDesignation > 0) {
-            $sql .= " AND cm.designation_id = ?";
+            $sql .= " AND att_cm.designation_id = ?";
             $params[] = $filterDesignation;
             $types   .= 'i';
         }
 
+        // Status
         if ($filterStatus !== '') {
             $sql .= " AND g.status = ?";
             $params[] = $filterStatus;
@@ -340,20 +403,21 @@ if ($isSubmitted && $canViewAnything && $conn instanceof mysqli) {
 }
 
 // ---------------------------------------------------------------------------
-// LOOKUP HELPER
+// SUMMARY LINE
 // ---------------------------------------------------------------------------
-function findName(array $list, int $id, string $key): string
-{
-    foreach ($list as $item) {
-        if ((int) $item['id'] === $id) return (string) $item[$key];
-    }
-    return 'All';
-}
+$summaryType        = $filterType > 0 ? findName($grievanceTypes, $filterType, 'type_name')
+                                      : (!$isManagement && $hasTypeAssignment ? $memberGrievanceTypeName : 'All');
+$summaryMember      = $filterMember > 0 ? findName($cellMembers, $filterMember, 'name') : 'All';
+$summaryCourse      = $filterCourse > 0 ? findName($courses, $filterCourse, 'course_name') : 'All';
+$summaryClass       = $filterClass > 0 ? findName($classes, $filterClass, 'class_name') : 'All';
+$summaryDepartment  = $filterDepartment > 0 ? findName($departments, $filterDepartment, 'department_name') : 'All';
+$summaryDesignation = $filterDesignation > 0 ? findName($designations, $filterDesignation, 'designation_name') : 'All';
+$summaryStatus      = $filterStatus !== '' ? $filterStatus : 'All';
+$totalRows          = count($rows);
 
-$summaryType   = $filterType > 0 ? findName($grievanceTypes, $filterType, 'type_name')
-                                 : (!$isManagement && $hasTypeAssignment ? $memberGrievanceTypeName : 'All');
-$summaryMember = $filterMember > 0 ? findName($cellMembers, $filterMember, 'name') : 'All';
-$summaryStatus = $filterStatus !== '' ? $filterStatus : 'All';
+$hasAnyExtraFilter = ($filterMember > 0 || $filterCourse > 0 || $filterClass > 0 ||
+                      $filterDepartment > 0 || $filterDesignation > 0 || $filterStatus !== '' ||
+                      ($isManagement && $filterType > 0));
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -377,25 +441,10 @@ $summaryStatus = $filterStatus !== '' ? $filterStatus : 'All';
             brandGold:   '#C5A059'
           },
           keyframes: {
-            fadeInUp: {
-              '0%':   { opacity: '0', transform: 'translateY(12px)' },
-              '100%': { opacity: '1', transform: 'translateY(0)' }
-            },
-            dropdownFade: {
-              '0%':   { opacity: '0', transform: 'translateY(-8px) scale(0.98)' },
-              '100%': { opacity: '1', transform: 'translateY(0) scale(1)' }
-            },
-            modalFadeIn: {
-              '0%':   { opacity: '0', transform: 'scale(0.96)' },
-              '100%': { opacity: '1', transform: 'scale(1)' }
-            },
-            confirmShake: {
-              '0%, 100%': { transform: 'translateX(0)' },
-              '20%':      { transform: 'translateX(-6px)' },
-              '40%':      { transform: 'translateX(6px)' },
-              '60%':      { transform: 'translateX(-4px)' },
-              '80%':      { transform: 'translateX(4px)' }
-            }
+            fadeInUp: { '0%': { opacity: '0', transform: 'translateY(12px)' }, '100%': { opacity: '1', transform: 'translateY(0)' } },
+            dropdownFade: { '0%': { opacity: '0', transform: 'translateY(-8px) scale(0.98)' }, '100%': { opacity: '1', transform: 'translateY(0) scale(1)' } },
+            modalFadeIn: { '0%': { opacity: '0', transform: 'scale(0.96)' }, '100%': { opacity: '1', transform: 'scale(1)' } },
+            confirmShake: { '0%, 100%': { transform: 'translateX(0)' }, '20%': { transform: 'translateX(-6px)' }, '40%': { transform: 'translateX(6px)' }, '60%': { transform: 'translateX(-4px)' }, '80%': { transform: 'translateX(4px)' } }
           },
           animation: {
             'fade-in-up': 'fadeInUp 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards',
@@ -410,9 +459,6 @@ $summaryStatus = $filterStatus !== '' ? $filterStatus : 'All';
 
   <link rel="stylesheet" href="../assets/css/index.css" />
 
-  <!-- ============================================================
-       PRINT STYLES — dedicated #print-area with inline styles only
-       ============================================================ -->
   <style>
     #print-area { display: none; }
 
@@ -451,9 +497,6 @@ $summaryStatus = $filterStatus !== '' ? $filterStatus : 'All';
 
 <body class="min-h-screen bg-slate-50 text-slate-800 antialiased flex flex-col">
 
-  <!-- ============================================================
-       SCREEN-ONLY WRAPPER
-       ============================================================ -->
   <div class="screen-only flex min-h-screen flex-1">
 
     <!-- SIDEBAR -->
@@ -471,7 +514,6 @@ $summaryStatus = $filterStatus !== '' ? $filterStatus : 'All';
 
       <nav class="flex flex-col space-y-2 flex-1 w-full px-3">
 
-        <!-- Dashboard -->
         <a href="dashboard.php"
            class="group relative w-full h-12 rounded-xl bg-white/10 hover:bg-white/20
                   flex items-center text-white transition-all px-3">
@@ -482,7 +524,6 @@ $summaryStatus = $filterStatus !== '' ? $filterStatus : 'All';
                        bg-[#4A154B] text-white text-xs px-3 py-1.5 rounded-lg shadow-lg z-50">Dashboard</span>
         </a>
 
-        <!-- My Profile -->
         <a href="profile.php"
            class="group relative w-full h-12 rounded-xl bg-white/10 hover:bg-white/20
                   flex items-center text-white transition-all px-3">
@@ -493,7 +534,6 @@ $summaryStatus = $filterStatus !== '' ? $filterStatus : 'All';
                        bg-[#4A154B] text-white text-xs px-3 py-1.5 rounded-lg shadow-lg z-50">My Profile</span>
         </a>
 
-        <!-- Grievance Reports (NEW) -->
         <a href="grievance_reports.php"
            class="group relative w-full h-12 rounded-xl bg-white/10 hover:bg-white/20
                   flex items-center text-white transition-all px-3">
@@ -504,7 +544,6 @@ $summaryStatus = $filterStatus !== '' ? $filterStatus : 'All';
                        bg-[#4A154B] text-white text-xs px-3 py-1.5 rounded-lg shadow-lg z-50">Grievance Reports</span>
         </a>
 
-        <!-- Change Password -->
         <a href="change_password.php"
            class="group relative w-full h-12 rounded-xl bg-white/10 hover:bg-white/20
                   flex items-center text-white transition-all px-3">
@@ -516,7 +555,6 @@ $summaryStatus = $filterStatus !== '' ? $filterStatus : 'All';
         </a>
       </nav>
 
-      <!-- Logout -->
       <a href="#" data-logout-trigger="1" id="sidebarLogoutBtn"
          class="group relative w-full h-12 rounded-xl bg-white/10 hover:bg-red-500/40
                 flex items-center text-white transition-all mx-3 px-3"
@@ -532,7 +570,6 @@ $summaryStatus = $filterStatus !== '' ? $filterStatus : 'All';
     <!-- MAIN CONTENT -->
     <div id="managementMain" class="flex-1 ml-20 flex flex-col min-h-screen transition-all duration-300">
 
-      <!-- HEADER -->
       <header class="bg-white border-b border-slate-200 shadow-sm sticky top-0 z-30">
         <div class="flex items-center justify-between px-6 py-4">
           <div class="flex items-center space-x-4">
@@ -608,7 +645,6 @@ $summaryStatus = $filterStatus !== '' ? $filterStatus : 'All';
         </div>
       </header>
 
-      <!-- PAGE CONTENT -->
       <main class="flex-1 px-6 py-8">
 
         <div class="max-w-6xl mx-auto mb-6 animate-fade-in-up">
@@ -627,12 +663,19 @@ $summaryStatus = $filterStatus !== '' ? $filterStatus : 'All';
             </div>
 
             <?php if ($isSubmitted): ?>
-              <button type="button" onclick="window.print();" title="Print Report"
-                      class="inline-flex items-center justify-center w-11 h-11 rounded-xl bg-[#4A154B] hover:bg-[#5A1B5C]
-                             text-white shadow-lg shadow-purple-500/30 hover:shadow-purple-500/50
-                             transition-all duration-300 hover:-translate-y-0.5 active:scale-95">
-                <i data-lucide="printer" class="w-5 h-5"></i>
-              </button>
+              <div class="flex items-center gap-3">
+                <span class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-bold
+                             bg-purple-50 text-[#4A154B] border border-purple-200">
+                  <i data-lucide="list-checks" class="w-3.5 h-3.5"></i>
+                  <?= (int) $totalRows ?> record<?= $totalRows === 1 ? '' : 's' ?>
+                </span>
+                <button type="button" onclick="window.print();" title="Print Report"
+                        class="inline-flex items-center justify-center w-11 h-11 rounded-xl bg-[#4A154B] hover:bg-[#5A1B5C]
+                               text-white shadow-lg shadow-purple-500/30 hover:shadow-purple-500/50
+                               transition-all duration-300 hover:-translate-y-0.5 active:scale-95">
+                  <i data-lucide="printer" class="w-5 h-5"></i>
+                </button>
+              </div>
             <?php endif; ?>
           </div>
         </div>
@@ -640,9 +683,10 @@ $summaryStatus = $filterStatus !== '' ? $filterStatus : 'All';
         <!-- FILTER CARD -->
         <div class="max-w-6xl mx-auto mb-6 animate-fade-in-up" style="animation-delay: 60ms;">
           <div class="bg-slate-100 border border-slate-200 rounded-xl px-6 py-6 shadow-sm">
-            <form method="GET" action="complaint_report.php" class="space-y-5">
+            <form method="GET" action="complaint_report.php" class="space-y-5" id="filterForm">
               <input type="hidden" name="submit" value="1" />
 
+              <!-- Row 1: dates + type -->
               <div class="grid grid-cols-1 md:grid-cols-3 gap-5">
                 <div class="space-y-2">
                   <label for="from" class="block text-sm font-semibold text-slate-700">From Date</label>
@@ -681,6 +725,7 @@ $summaryStatus = $filterStatus !== '' ? $filterStatus : 'All';
                 </div>
               </div>
 
+              <!-- Row 2: member + course + class -->
               <div class="grid grid-cols-1 md:grid-cols-3 gap-5">
                 <div class="space-y-2">
                   <label for="grievance_member_id" class="block text-sm font-semibold text-slate-700">Grievance Member</label>
@@ -711,23 +756,6 @@ $summaryStatus = $filterStatus !== '' ? $filterStatus : 'All';
                   </select>
                 </div>
                 <div class="space-y-2">
-                  <label for="department_id" class="block text-sm font-semibold text-slate-700">Department</label>
-                  <select name="department_id" id="department_id"
-                          class="w-full px-4 py-2.5 border-2 border-slate-200 rounded-lg text-sm bg-white text-slate-800 font-medium
-                                 focus:outline-none focus:border-[#4A154B] focus:ring-4 focus:ring-[#4A154B]/10
-                                 hover:border-[#4A154B]/40 transition-all">
-                    <option value="0">All</option>
-                    <?php foreach ($departments as $d): ?>
-                      <option value="<?= (int) $d['id'] ?>" <?= $filterDepartment === (int) $d['id'] ? 'selected' : '' ?>>
-                        <?= e($d['department_name']) ?>
-                      </option>
-                    <?php endforeach; ?>
-                  </select>
-                </div>
-              </div>
-
-              <div class="grid grid-cols-1 md:grid-cols-3 gap-5">
-                <div class="space-y-2">
                   <label for="class_id" class="block text-sm font-semibold text-slate-700">Class</label>
                   <select name="class_id" id="class_id"
                           class="w-full px-4 py-2.5 border-2 border-slate-200 rounded-lg text-sm bg-white text-slate-800 font-medium
@@ -737,6 +765,27 @@ $summaryStatus = $filterStatus !== '' ? $filterStatus : 'All';
                     <?php foreach ($classes as $cl): ?>
                       <option value="<?= (int) $cl['id'] ?>" <?= $filterClass === (int) $cl['id'] ? 'selected' : '' ?>>
                         <?= e($cl['class_name']) ?>
+                      </option>
+                    <?php endforeach; ?>
+                  </select>
+                  <?php if ($filterCourse > 0): ?>
+                    <p class="text-[11px] text-slate-500 mt-1">Filtered to the selected course.</p>
+                  <?php endif; ?>
+                </div>
+              </div>
+
+              <!-- Row 3: department + designation + status -->
+              <div class="grid grid-cols-1 md:grid-cols-3 gap-5">
+                <div class="space-y-2">
+                  <label for="department_id" class="block text-sm font-semibold text-slate-700">Department</label>
+                  <select name="department_id" id="department_id"
+                          class="w-full px-4 py-2.5 border-2 border-slate-200 rounded-lg text-sm bg-white text-slate-800 font-medium
+                                 focus:outline-none focus:border-[#4A154B] focus:ring-4 focus:ring-[#4A154B]/10
+                                 hover:border-[#4A154B]/40 transition-all">
+                    <option value="0">All</option>
+                    <?php foreach ($departments as $d): ?>
+                      <option value="<?= (int) $d['id'] ?>" <?= $filterDepartment === (int) $d['id'] ? 'selected' : '' ?>>
+                        <?= e($d['department_name']) ?>
                       </option>
                     <?php endforeach; ?>
                   </select>
@@ -771,16 +820,36 @@ $summaryStatus = $filterStatus !== '' ? $filterStatus : 'All';
                 </div>
               </div>
 
-              <div class="flex justify-center pt-3">
+              <!-- Actions -->
+              <div class="flex flex-wrap items-center justify-center gap-3 pt-3">
                 <button type="submit"
                         class="px-10 py-3 rounded-xl
                                bg-gradient-to-r from-[#6A2C8A] via-[#8B1E7E] to-[#C43A7A]
                                hover:from-[#5A1C7A] hover:via-[#7B0E6E] hover:to-[#B42A6A]
                                text-white font-bold shadow-lg shadow-purple-500/30 hover:shadow-purple-500/50
-                               transition-all duration-300 hover:-translate-y-0.5 active:scale-95">
-                  Submit
+                               transition-all duration-300 hover:-translate-y-0.5 active:scale-95
+                               flex items-center gap-2">
+                  <i data-lucide="filter" class="w-4 h-4"></i>
+                  <span>Submit</span>
                 </button>
+
+                <a href="complaint_report.php?submit=1"
+                   class="px-6 py-3 rounded-xl font-semibold text-slate-700
+                          bg-white hover:bg-slate-200 border border-slate-300
+                          transition-all duration-200 active:scale-95
+                          flex items-center gap-2">
+                  <i data-lucide="rotate-ccw" class="w-4 h-4"></i>
+                  <span>Clear Filters</span>
+                </a>
               </div>
+
+              <?php if ($isSubmitted && $hasAnyExtraFilter): ?>
+                <p class="text-[11px] text-slate-500 text-center pt-1">
+                  Active filters: Type=<?= e($summaryType) ?> · Member=<?= e($summaryMember) ?> · Course=<?= e($summaryCourse) ?>
+                  · Class=<?= e($summaryClass) ?> · Dept=<?= e($summaryDepartment) ?> · Designation=<?= e($summaryDesignation) ?>
+                  · Status=<?= e($summaryStatus) ?>
+                </p>
+              <?php endif; ?>
             </form>
           </div>
         </div>
@@ -841,7 +910,7 @@ $summaryStatus = $filterStatus !== '' ? $filterStatus : 'All';
                     <?php else: ?>
                       <?php foreach ($rows as $i => $r): ?>
                         <?php
-                          $rDate = !empty($r['created_at']) ? date('Y-m-d', strtotime((string) $r['created_at'])) : '—';
+                          $rDate = !empty($r['created_at']) ? date('d M y', strtotime((string) $r['created_at'])) : '—';
                           $fullDesc     = (string) ($r['description'] ?? '');
                           $descPreview  = mb_strlen($fullDesc, 'UTF-8') > 120 ? mb_substr($fullDesc, 0, 120, 'UTF-8') . '…' : $fullDesc;
                           $replyFull    = (string) ($r['reply_details'] ?? '');
@@ -880,7 +949,7 @@ $summaryStatus = $filterStatus !== '' ? $filterStatus : 'All';
               </div>
               <?php if (!empty($rows)): ?>
                 <div class="px-6 py-4 bg-slate-50/50 border-t border-slate-200 text-xs text-slate-600">
-                  <p>Total records: <span class="font-semibold text-slate-800"><?= count($rows) ?></span> · Generated on <?= date('d-m-Y H:i') ?></p>
+                  <p>Total records: <span class="font-semibold text-slate-800"><?= (int) $totalRows ?></span> · Generated on <?= date('d-m-Y H:i') ?></p>
                 </div>
               <?php endif; ?>
             </div>
@@ -901,7 +970,6 @@ $summaryStatus = $filterStatus !== '' ? $filterStatus : 'All';
 
       </main>
 
-      <!-- FOOTER -->
       <footer class="bg-gradient-to-r from-purple-200 via-pink-100 to-purple-200 border-t border-purple-200/60 mt-auto">
         <div class="px-6 py-6">
           <div class="max-w-7xl mx-auto text-center">
@@ -920,14 +988,10 @@ $summaryStatus = $filterStatus !== '' ? $filterStatus : 'All';
 
     </div>
   </div>
-  <!-- END .screen-only -->
 
-  <!-- ============================================================
-       PRINT-ONLY AREA
-       ============================================================ -->
+  <!-- PRINT-ONLY AREA -->
   <?php if ($isSubmitted): ?>
   <div id="print-area">
-    <!-- Header -->
     <table style="width:100%;border-collapse:collapse;margin-bottom:8px;">
       <tr>
         <td style="vertical-align:middle;width:60%;">
@@ -993,7 +1057,7 @@ $summaryStatus = $filterStatus !== '' ? $filterStatus : 'All';
         <?php else: ?>
           <?php foreach ($rows as $i => $r): ?>
             <?php
-              $rDate = !empty($r['created_at']) ? date('Y-m-d', strtotime((string) $r['created_at'])) : '—';
+              $rDate = !empty($r['created_at']) ? date('d-m-Y', strtotime((string) $r['created_at'])) : '—';
               $printDesc  = trim(preg_replace('/\s+/', ' ', (string) ($r['description'] ?? '')));
               $printReply = trim(preg_replace('/\s+/', ' ', (string) ($r['reply_details'] ?? '')));
               $printFb    = trim(preg_replace('/\s+/', ' ', (string) ($r['feedback_details'] ?? '')));
@@ -1016,7 +1080,7 @@ $summaryStatus = $filterStatus !== '' ? $filterStatus : 'All';
     </table>
 
     <div style="margin-top:10px;font-size:10px;color:#333;">
-      <strong>Total records:</strong> <?= count($rows) ?>
+      <strong>Total records:</strong> <?= (int) $totalRows ?>
       &nbsp;&nbsp;|&nbsp;&nbsp;
       <strong>Generated on:</strong> <?= date('d-m-Y H:i') ?>
     </div>
@@ -1130,6 +1194,21 @@ $summaryStatus = $filterStatus !== '' ? $filterStatus : 'All';
           if (chevron) chevron.classList.remove('rotate-180');
           btn.setAttribute('aria-expanded','false');
         }
+      });
+    })();
+
+    // Course → Class cascade: when user picks a course, auto-submit so the
+    // class dropdown is repopulated (scoped to that course).
+    (function () {
+      const courseSel = document.getElementById('course_id');
+      const classSel  = document.getElementById('class_id');
+      const form      = document.getElementById('filterForm');
+      if (!courseSel || !classSel || !form) return;
+
+      courseSel.addEventListener('change', function () {
+        // Clear the class selection so it doesn't reference a class from another course
+        classSel.value = '0';
+        form.submit();
       });
     })();
 
