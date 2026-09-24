@@ -10,6 +10,8 @@
  *   • POST processing: verify current password → validate new → update BCRYPT hash
  *   • Auto-redirect to dashboard after successful password change
  *   • Success / error messaging
+ *   • Themed logout confirmation modal
+ *   • Full profile dropdown in header
  * ---------------------------------------------------------------------------
  */
 
@@ -68,7 +70,7 @@ if ($conn && $conn->connect_errno) {
 $userId = (int) $_SESSION['user_id'];
 
 // ---------------------------------------------------------------------------
-// 4. HELPER — HTML ESCAPE
+// 4. HELPER
 // ---------------------------------------------------------------------------
 function e(?string $v): string
 {
@@ -76,20 +78,72 @@ function e(?string $v): string
 }
 
 // ---------------------------------------------------------------------------
-// 5. HANDLE POST SUBMISSION
+// 5. FETCH ADMIN PROFILE (for header display)
 // ---------------------------------------------------------------------------
-$successMessage = '';
-$formErrors     = [];
+$adminData = [
+    'username'        => $_SESSION['username'] ?? 'Admin',
+    'name'            => '',
+    'email'           => '',
+    'profile_picture' => '',
+];
+
+if ($conn instanceof mysqli) {
+    try {
+        $sql = "SELECT  u.username,
+                        ap.name,
+                        ap.email,
+                        ap.profile_picture
+                FROM users u
+                LEFT JOIN admin_profiles ap ON ap.user_id = u.id
+                WHERE u.id = ?
+                LIMIT 1";
+
+        $stmt = $conn->prepare($sql);
+        if ($stmt) {
+            $stmt->bind_param('i', $userId);
+            $stmt->execute();
+            $res = $stmt->get_result();
+
+            if ($res && $res->num_rows > 0) {
+                $row = $res->fetch_assoc();
+                $adminData['username']        = $row['username']        ?? $adminData['username'];
+                $adminData['name']            = $row['name']            ?? '';
+                $adminData['email']           = $row['email']           ?? '';
+                $adminData['profile_picture'] = $row['profile_picture'] ?? '';
+            }
+            $stmt->close();
+        }
+    } catch (Throwable $ex) {
+        error_log('[Change Password Admin Profile] ' . $ex->getMessage());
+    }
+}
+
+$displayName  = !empty($adminData['name']) ? $adminData['name'] : $adminData['username'];
+$displayEmail = !empty($adminData['email']) ? $adminData['email'] : 'admin@rajagiri.edu';
+
+$hasProfilePicture = false;
+$profilePictureUrl = '';
+if (!empty($adminData['profile_picture'])) {
+    $relativeFromAdmin = '../' . ltrim((string) $adminData['profile_picture'], '/');
+    if (file_exists(__DIR__ . '/../' . ltrim((string) $adminData['profile_picture'], '/'))) {
+        $hasProfilePicture = true;
+        $profilePictureUrl = $relativeFromAdmin;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 6. HANDLE POST SUBMISSION
+// ---------------------------------------------------------------------------
+$successMessage  = '';
+$formErrors      = [];
 $passwordChanged = false;
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
-    // ----- Collect & Sanitize -----
     $currentPassword = (string) ($_POST['current_password'] ?? '');
     $newPassword     = (string) ($_POST['new_password']     ?? '');
     $confirmPassword = (string) ($_POST['confirm_password'] ?? '');
 
-    // ----- Validation -----
     if ($currentPassword === '') {
         $formErrors[] = 'Current password is required.';
     }
@@ -106,7 +160,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $formErrors[] = 'New password and Confirm password do not match.';
     }
 
-    // ----- Fetch current hash & verify -----
     if (empty($formErrors) && $conn !== null) {
         try {
             $stmt = $conn->prepare("SELECT password FROM users WHERE id = ? LIMIT 1");
@@ -123,7 +176,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 } elseif ($currentPassword === $newPassword) {
                     $formErrors[] = 'New password must be different from the current password.';
                 } else {
-                    // ----- Update password -----
                     $hashedPassword = password_hash($newPassword, PASSWORD_BCRYPT);
 
                     $stmtUpd = $conn->prepare("UPDATE users SET password = ? WHERE id = ?");
@@ -161,13 +213,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
   <title>Change Password — Admin | Rajagiri College Grievance Portal</title>
   <link rel="icon" type="image/svg+xml" href="../public/favicon.svg" />
 
-  <!-- Tailwind CSS CDN -->
   <script src="https://cdn.tailwindcss.com"></script>
-
-  <!-- Lucide Icons CDN -->
   <script src="https://unpkg.com/lucide@latest"></script>
 
-  <!-- Tailwind Theme -->
   <script>
     tailwind.config = {
       theme: {
@@ -179,25 +227,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             brandGold: '#C5A059'
           },
           keyframes: {
-            fadeInUp: {
-              '0%':   { opacity: '0', transform: 'translateY(12px)' },
-              '100%': { opacity: '1', transform: 'translateY(0)' }
-            },
-            countdown: {
-              '0%':   { width: '100%' },
-              '100%': { width: '0%' }
-            }
+            fadeInUp: { '0%': { opacity: '0', transform: 'translateY(12px)' }, '100%': { opacity: '1', transform: 'translateY(0)' } },
+            dropdownFade: { '0%': { opacity: '0', transform: 'translateY(-8px) scale(0.98)' }, '100%': { opacity: '1', transform: 'translateY(0) scale(1)' } },
+            modalFadeIn: { '0%': { opacity: '0', transform: 'scale(0.96)' }, '100%': { opacity: '1', transform: 'scale(1)' } },
+            confirmShake: { '0%, 100%': { transform: 'translateX(0)' }, '20%': { transform: 'translateX(-6px)' }, '40%': { transform: 'translateX(6px)' }, '60%': { transform: 'translateX(-4px)' }, '80%': { transform: 'translateX(4px)' } },
+            countdown: { '0%': { width: '100%' }, '100%': { width: '0%' } }
           },
           animation: {
             'fade-in-up': 'fadeInUp 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards',
-            'countdown':  'countdown 3s linear forwards'
+            'dropdown': 'dropdownFade 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards',
+            'modal-in': 'modalFadeIn 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards',
+            'confirm-shake': 'confirmShake 0.5s cubic-bezier(0.16, 1, 0.3, 1)',
+            'countdown': 'countdown 3s linear forwards'
           }
         }
       }
     };
   </script>
 
-  <!-- Local Styles -->
   <link rel="stylesheet" href="../assets/css/index.css" />
 </head>
 
@@ -205,9 +252,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
   <div class="flex min-h-screen flex-1">
 
-    <!-- ============================================================
-         SIDEBAR
-         ============================================================ -->
+    <!-- SIDEBAR -->
     <aside class="w-20 bg-gradient-to-b from-[#4A154B] via-[#5A1B5C] to-[#006837] flex flex-col items-center py-4 shadow-2xl fixed inset-y-0 left-0 z-40">
 
       <button class="text-white/80 hover:text-white mb-8 p-2 rounded-lg hover:bg-white/10 transition-colors" aria-label="Toggle sidebar">
@@ -220,40 +265,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
            class="group relative w-12 h-12 rounded-xl bg-white/10 hover:bg-white/20 flex items-center justify-center text-white transition-all hover:scale-110"
            title="Dashboard">
           <i data-lucide="home" class="w-6 h-6"></i>
-          <span class="absolute left-full ml-3 hidden group-hover:block whitespace-nowrap bg-[#4A154B] text-white text-xs px-3 py-1.5 rounded-lg shadow-lg z-50">
-            Dashboard
-          </span>
+          <span class="absolute left-full ml-3 hidden group-hover:block whitespace-nowrap bg-[#4A154B] text-white text-xs px-3 py-1.5 rounded-lg shadow-lg z-50">Dashboard</span>
         </a>
 
         <a href="profile.php"
            class="group relative w-12 h-12 rounded-xl bg-white/10 hover:bg-white/20 flex items-center justify-center text-white transition-all hover:scale-110"
            title="Profile">
           <i data-lucide="user" class="w-6 h-6"></i>
-          <span class="absolute left-full ml-3 hidden group-hover:block whitespace-nowrap bg-[#4A154B] text-white text-xs px-3 py-1.5 rounded-lg shadow-lg z-50">
-            Profile
-          </span>
+          <span class="absolute left-full ml-3 hidden group-hover:block whitespace-nowrap bg-[#4A154B] text-white text-xs px-3 py-1.5 rounded-lg shadow-lg z-50">Profile</span>
         </a>
 
       </nav>
 
-      <a href="../logout.php?role=admin"
+      <!-- Logout Trigger -->
+      <a href="#" data-logout-trigger="1"
          id="sidebarLogoutBtn"
          class="group relative w-12 h-12 rounded-xl bg-white/10 hover:bg-red-500/40 flex items-center justify-center text-white transition-all hover:scale-110"
          title="Logout">
         <i data-lucide="log-out" class="w-6 h-6 group-hover:translate-x-0.5 transition-transform"></i>
-        <span class="absolute left-full ml-3 hidden group-hover:block whitespace-nowrap bg-red-600 text-white text-xs px-3 py-1.5 rounded-lg shadow-lg z-50">
-          Logout
-        </span>
+        <span class="absolute left-full ml-3 hidden group-hover:block whitespace-nowrap bg-red-600 text-white text-xs px-3 py-1.5 rounded-lg shadow-lg z-50">Logout</span>
       </a>
 
     </aside>
 
-    <!-- ============================================================
-         MAIN CONTENT
-         ============================================================ -->
+    <!-- MAIN CONTENT -->
     <div class="flex-1 ml-20 flex flex-col min-h-screen">
 
-      <!-- ============ TOP HEADER ============ -->
       <header class="bg-white border-b border-slate-200 shadow-sm sticky top-0 z-30">
         <div class="flex items-center justify-between px-6 py-4">
 
@@ -271,25 +308,89 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                  class="hidden sm:block h-8 md:h-9 w-auto object-contain" />
           </div>
 
-          <!-- Right Side: Back to Dashboard + Profile -->
+          <!-- ============ RIGHT SIDE: BACK TO DASHBOARD + PROFILE DROPDOWN ============ -->
           <div class="flex items-center space-x-3">
 
             <!-- Back to Dashboard Button -->
             <a href="dashboard.php"
-               class="group relative inline-flex items-center space-x-2 px-3 sm:px-4 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 border border-slate-200 hover:border-slate-300 text-slate-700 transition-all duration-300 hover:-translate-y-0.5">
+               class="group relative hidden sm:inline-flex items-center space-x-2 px-4 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 border border-slate-200 hover:border-slate-300 text-slate-700 transition-all duration-300 hover:-translate-y-0.5">
               <i data-lucide="arrow-left" class="w-4 h-4 group-hover:-translate-x-1 transition-transform duration-300"></i>
-              <span class="text-xs sm:text-sm font-semibold tracking-wide hidden sm:block">Back to Dashboard</span>
-              <i data-lucide="layout-dashboard" class="w-4 h-4 sm:hidden"></i>
+              <span class="text-sm font-semibold tracking-wide">Back to Dashboard</span>
             </a>
 
-            <!-- Profile Chip -->
-            <div class="flex items-center space-x-3 px-3 py-2">
-              <div class="w-10 h-10 rounded-full bg-gradient-to-br from-[#4A154B] to-[#8B1E7E] flex items-center justify-center text-white">
-                <i data-lucide="user" class="w-5 h-5"></i>
+            <!-- ============ ADMIN PROFILE DROPDOWN ============ -->
+            <div class="relative" id="admin-dropdown-container">
+              <button id="admin-dropdown-btn"
+                      type="button"
+                      aria-haspopup="true"
+                      aria-expanded="false"
+                      class="flex items-center space-x-3 px-3 py-2 rounded-lg hover:bg-slate-100 transition-colors">
+
+                <?php if ($hasProfilePicture): ?>
+                  <img src="<?= e($profilePictureUrl) ?>"
+                       alt="<?= e($displayName) ?>"
+                       class="w-10 h-10 rounded-full object-cover border-2 border-[#C5A059] shadow-md ring-2 ring-purple-100" />
+                <?php else: ?>
+                  <div class="w-10 h-10 rounded-full bg-gradient-to-br from-[#4A154B] to-[#8B1E7E] flex items-center justify-center text-white shadow-md ring-2 ring-purple-100">
+                    <i data-lucide="user" class="w-5 h-5"></i>
+                  </div>
+                <?php endif; ?>
+
+                <span class="hidden sm:block text-sm font-semibold text-slate-700"><?= e($displayName) ?></span>
+                <i data-lucide="chevron-down" id="admin-chevron" class="w-4 h-4 text-slate-500 transition-transform duration-300"></i>
+              </button>
+
+              <div id="admin-dropdown-menu"
+                   class="hidden absolute right-0 mt-2 w-64 bg-white rounded-xl shadow-2xl border border-slate-200 py-2 z-50 overflow-hidden">
+
+                <div class="px-4 py-3 border-b border-slate-100 bg-gradient-to-r from-slate-50 to-white">
+                  <div class="flex items-center space-x-3">
+                    <?php if ($hasProfilePicture): ?>
+                      <img src="<?= e($profilePictureUrl) ?>"
+                           alt="<?= e($displayName) ?>"
+                           class="w-12 h-12 rounded-full object-cover border-2 border-[#C5A059]" />
+                    <?php else: ?>
+                      <div class="w-12 h-12 rounded-full bg-gradient-to-br from-[#4A154B] to-[#8B1E7E] flex items-center justify-center text-white">
+                        <i data-lucide="user" class="w-6 h-6 text-white"></i>
+                      </div>
+                    <?php endif; ?>
+
+                    <div class="min-w-0 flex-1">
+                      <p class="text-sm font-bold text-slate-800 truncate"><?= e($displayName) ?></p>
+                      <p class="text-xs text-slate-500 truncate"><?= e($displayEmail) ?></p>
+                    </div>
+                  </div>
+                </div>
+
+                <a href="dashboard.php"
+                   class="flex items-center px-4 py-2.5 text-sm text-slate-700 hover:bg-gradient-to-r hover:from-pink-50 hover:to-purple-50 hover:text-[#8B1E7E] transition-all duration-200 group/item">
+                  <i data-lucide="layout-dashboard" class="w-4 h-4 mr-3 text-[#8B1E7E] group-hover/item:scale-110 transition-transform"></i>
+                  <span class="font-medium">Dashboard</span>
+                  <i data-lucide="arrow-right" class="w-4 h-4 ml-auto opacity-0 group-hover/item:opacity-100 text-[#8B1E7E] transition-opacity"></i>
+                </a>
+
+                <a href="profile.php"
+                   class="flex items-center px-4 py-2.5 text-sm text-slate-700 hover:bg-gradient-to-r hover:from-pink-50 hover:to-purple-50 hover:text-[#8B1E7E] transition-all duration-200 group/item">
+                  <i data-lucide="user" class="w-4 h-4 mr-3 text-[#8B1E7E] group-hover/item:scale-110 transition-transform"></i>
+                  <span class="font-medium">My Profile</span>
+                  <i data-lucide="arrow-right" class="w-4 h-4 ml-auto opacity-0 group-hover/item:opacity-100 text-[#8B1E7E] transition-opacity"></i>
+                </a>
+
+                <a href="change_password.php"
+                   class="flex items-center px-4 py-2.5 text-sm text-[#8B1E7E] bg-purple-50/50 font-medium">
+                  <i data-lucide="key" class="w-4 h-4 mr-3"></i>
+                  <span>Change Password</span>
+                </a>
+
+                <div class="border-t border-slate-100 mt-2 pt-2">
+                  <a href="#" data-logout-trigger="1"
+                     id="dropdownLogoutBtn"
+                     class="flex items-center px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 transition-all duration-200 group/item">
+                    <i data-lucide="log-out" class="w-4 h-4 mr-3 group-hover/item:scale-110 transition-transform"></i>
+                    <span class="font-medium">Logout</span>
+                  </a>
+                </div>
               </div>
-              <span class="hidden sm:block text-sm font-semibold text-slate-700">
-                <?= e($_SESSION['username'] ?? 'Admin') ?>
-              </span>
             </div>
 
           </div>
@@ -297,10 +398,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         </div>
       </header>
 
-      <!-- ============ PAGE CONTENT ============ -->
       <main class="flex-1 px-6 py-8">
 
-        <!-- Breadcrumb -->
         <div class="max-w-5xl mx-auto mb-8 animate-fade-in-up">
           <h1 class="text-2xl md:text-3xl font-bold text-slate-800 mb-3 flex items-center tracking-tight">
             <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-[#4A154B] to-[#E5097F] flex items-center justify-center mr-3 shadow-lg shadow-purple-500/20">
@@ -318,7 +417,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
           </nav>
         </div>
 
-        <!-- Success Message (with auto-redirect countdown) -->
         <?php if ($passwordChanged && $successMessage !== ''): ?>
           <div id="success-banner"
                class="max-w-2xl mx-auto mb-6 rounded-2xl border-2 border-emerald-200 bg-emerald-50 px-5 py-4 flex items-start space-x-3 shadow-lg shadow-emerald-500/10">
@@ -326,13 +424,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
               <i data-lucide="check-circle" class="w-6 h-6 text-white"></i>
             </div>
             <div class="flex-1">
-              <p class="text-sm font-bold text-emerald-800">
-                <?= e($successMessage) ?>
-              </p>
+              <p class="text-sm font-bold text-emerald-800"><?= e($successMessage) ?></p>
               <p class="text-xs text-emerald-700 mt-1">
                 Redirecting you to the dashboard in <span id="countdown-text">3</span> seconds…
               </p>
-              <!-- Countdown bar -->
               <div class="h-1 bg-emerald-200 rounded-full overflow-hidden mt-3">
                 <div class="h-full bg-emerald-500 animate-countdown"></div>
               </div>
@@ -340,7 +435,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
           </div>
 
           <script>
-            // ---- Auto-redirect with visible countdown ----
             (function () {
               var seconds = 3;
               var textEl = document.getElementById('countdown-text');
@@ -358,7 +452,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
           </script>
         <?php endif; ?>
 
-        <!-- Error Messages -->
         <?php if (!empty($formErrors)): ?>
           <div class="max-w-2xl mx-auto mb-6 rounded-xl border-2 border-red-200 bg-red-50 px-4 py-3 flex items-start space-x-2">
             <i data-lucide="alert-circle" class="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5"></i>
@@ -370,14 +463,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
           </div>
         <?php endif; ?>
 
-        <!-- ============ CHANGE PASSWORD CARD ============ -->
         <div class="max-w-2xl mx-auto animate-fade-in-up" style="animation-delay: 100ms;">
           <div class="relative group/card">
             <div class="absolute -inset-0.5 bg-gradient-to-r from-[#4A154B] via-[#8B1E7E] to-[#E5097F] rounded-2xl blur opacity-10 group-hover/card:opacity-20 transition duration-500"></div>
 
             <div class="relative bg-white rounded-2xl shadow-xl border border-slate-200/60 overflow-hidden">
 
-              <!-- Card Header -->
               <div class="bg-gradient-to-r from-[#4A154B] via-[#8B1E7E] to-[#E5097F] px-6 py-5 relative overflow-hidden">
                 <div class="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-full blur-2xl -translate-y-1/2 translate-x-1/2"></div>
                 <div class="absolute bottom-0 left-0 w-24 h-24 bg-white/5 rounded-full blur-xl translate-y-1/2 -translate-x-1/2"></div>
@@ -393,7 +484,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 </div>
               </div>
 
-              <!-- Form -->
               <form action="change_password.php" method="POST" class="p-6 sm:p-8 space-y-6" novalidate>
 
                 <!-- Current Password -->
@@ -405,23 +495,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     <div class="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
                       <i data-lucide="lock" class="w-5 h-5 text-slate-400"></i>
                     </div>
-                    <input
-                      type="password"
-                      id="current_password"
-                      name="current_password"
-                      required
-                      autocomplete="current-password"
-                      placeholder="Enter your current password"
-                      class="w-full pl-12 pr-12 py-3.5 border-2 border-slate-200 rounded-xl bg-white text-slate-700 font-medium
-                             focus:outline-none focus:border-[#4A154B] focus:ring-4 focus:ring-[#4A154B]/10
-                             transition-all duration-200 hover:border-[#4A154B]/40"
-                    />
-                    <button
-                      type="button"
-                      onclick="togglePasswordVisibility('current_password', this)"
-                      class="absolute inset-y-0 right-0 pr-4 flex items-center text-slate-400 hover:text-[#4A154B] transition-colors"
-                      aria-label="Toggle password visibility"
-                    >
+                    <input type="password" id="current_password" name="current_password" required
+                           autocomplete="current-password" placeholder="Enter your current password"
+                           class="w-full pl-12 pr-12 py-3.5 border-2 border-slate-200 rounded-xl bg-white text-slate-700 font-medium
+                                  focus:outline-none focus:border-[#4A154B] focus:ring-4 focus:ring-[#4A154B]/10
+                                  transition-all duration-200 hover:border-[#4A154B]/40" />
+                    <button type="button" onclick="togglePasswordVisibility('current_password', this)"
+                            class="absolute inset-y-0 right-0 pr-4 flex items-center text-slate-400 hover:text-[#4A154B] transition-colors"
+                            aria-label="Toggle password visibility">
                       <i data-lucide="eye" class="w-5 h-5"></i>
                     </button>
                   </div>
@@ -436,25 +517,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     <div class="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
                       <i data-lucide="key" class="w-5 h-5 text-slate-400"></i>
                     </div>
-                    <input
-                      type="password"
-                      id="new_password"
-                      name="new_password"
-                      required
-                      minlength="6"
-                      autocomplete="new-password"
-                      placeholder="Enter new password"
-                      oninput="updatePasswordStrength(this.value)"
-                      class="w-full pl-12 pr-12 py-3.5 border-2 border-slate-200 rounded-xl bg-white text-slate-700 font-medium
-                             focus:outline-none focus:border-[#4A154B] focus:ring-4 focus:ring-[#4A154B]/10
-                             transition-all duration-200 hover:border-[#4A154B]/40"
-                    />
-                    <button
-                      type="button"
-                      onclick="togglePasswordVisibility('new_password', this)"
-                      class="absolute inset-y-0 right-0 pr-4 flex items-center text-slate-400 hover:text-[#4A154B] transition-colors"
-                      aria-label="Toggle password visibility"
-                    >
+                    <input type="password" id="new_password" name="new_password" required minlength="6"
+                           autocomplete="new-password" placeholder="Enter new password"
+                           oninput="updatePasswordStrength(this.value)"
+                           class="w-full pl-12 pr-12 py-3.5 border-2 border-slate-200 rounded-xl bg-white text-slate-700 font-medium
+                                  focus:outline-none focus:border-[#4A154B] focus:ring-4 focus:ring-[#4A154B]/10
+                                  transition-all duration-200 hover:border-[#4A154B]/40" />
+                    <button type="button" onclick="togglePasswordVisibility('new_password', this)"
+                            class="absolute inset-y-0 right-0 pr-4 flex items-center text-slate-400 hover:text-[#4A154B] transition-colors"
+                            aria-label="Toggle password visibility">
                       <i data-lucide="eye" class="w-5 h-5"></i>
                     </button>
                   </div>
@@ -502,24 +573,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     <div class="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
                       <i data-lucide="lock" class="w-5 h-5 text-slate-400"></i>
                     </div>
-                    <input
-                      type="password"
-                      id="confirm_password"
-                      name="confirm_password"
-                      required
-                      autocomplete="new-password"
-                      placeholder="Re-enter new password"
-                      oninput="checkPasswordMatch()"
-                      class="w-full pl-12 pr-12 py-3.5 border-2 border-slate-200 rounded-xl bg-white text-slate-700 font-medium
-                             focus:outline-none focus:border-[#4A154B] focus:ring-4 focus:ring-[#4A154B]/10
-                             transition-all duration-200 hover:border-[#4A154B]/40"
-                    />
-                    <button
-                      type="button"
-                      onclick="togglePasswordVisibility('confirm_password', this)"
-                      class="absolute inset-y-0 right-0 pr-4 flex items-center text-slate-400 hover:text-[#4A154B] transition-colors"
-                      aria-label="Toggle password visibility"
-                    >
+                    <input type="password" id="confirm_password" name="confirm_password" required
+                           autocomplete="new-password" placeholder="Re-enter new password"
+                           oninput="checkPasswordMatch()"
+                           class="w-full pl-12 pr-12 py-3.5 border-2 border-slate-200 rounded-xl bg-white text-slate-700 font-medium
+                                  focus:outline-none focus:border-[#4A154B] focus:ring-4 focus:ring-[#4A154B]/10
+                                  transition-all duration-200 hover:border-[#4A154B]/40" />
+                    <button type="button" onclick="togglePasswordVisibility('confirm_password', this)"
+                            class="absolute inset-y-0 right-0 pr-4 flex items-center text-slate-400 hover:text-[#4A154B] transition-colors"
+                            aria-label="Toggle password visibility">
                       <i data-lucide="eye" class="w-5 h-5"></i>
                     </button>
                     <div id="confirm-check" class="absolute inset-y-0 right-12 flex items-center pointer-events-none hidden">
@@ -535,7 +597,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <!-- Action Buttons -->
                 <div class="flex flex-col sm:flex-row justify-end items-center gap-3 pt-4 border-t border-slate-200">
 
-                  <!-- Back to Dashboard Button -->
                   <a href="dashboard.php"
                      class="group/btn relative w-full sm:w-auto overflow-hidden rounded-xl border-2 border-slate-200 bg-white hover:border-[#4A154B]/40 hover:bg-slate-50 transition-all duration-300 hover:scale-[1.02] active:scale-95">
                     <div class="relative flex items-center justify-center space-x-2 py-3 px-6 text-slate-700 font-bold group-hover/btn:text-[#4A154B] transition-colors">
@@ -544,11 +605,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     </div>
                   </a>
 
-                  <!-- Change Password Submit -->
-                  <button
-                    type="submit"
-                    class="group/btn relative w-full sm:w-auto overflow-hidden rounded-xl shadow-lg shadow-purple-500/30 hover:shadow-2xl hover:shadow-purple-500/50 hover:scale-[1.02] active:scale-95 transition-all duration-300"
-                  >
+                  <button type="submit"
+                          class="group/btn relative w-full sm:w-auto overflow-hidden rounded-xl shadow-lg shadow-purple-500/30 hover:shadow-2xl hover:shadow-purple-500/50 hover:scale-[1.02] active:scale-95 transition-all duration-300">
                     <div class="absolute inset-0 bg-gradient-to-r from-[#4A154B] via-[#8B1E7E] to-[#E5097F]"></div>
                     <div class="absolute inset-0 bg-gradient-to-r from-[#E5097F] via-[#8B1E7E] to-[#4A154B] opacity-0 group-hover/btn:opacity-100 transition-opacity duration-500"></div>
                     <div class="absolute inset-0 bg-[radial-gradient(circle_at_50%_50%,rgba(255,255,255,0.2),transparent_70%)] opacity-0 group-hover/btn:opacity-100 transition-opacity duration-500"></div>
@@ -582,7 +640,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
       </main>
 
-      <!-- ============ FOOTER ============ -->
       <footer class="bg-gradient-to-r from-purple-200 via-pink-100 to-purple-200 border-t border-purple-200/60 mt-auto">
         <div class="px-6 py-6">
           <div class="max-w-7xl mx-auto text-center">
@@ -604,11 +661,139 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     </div>
   </div>
 
-  <!-- ====================== SCRIPTS ====================== -->
+  <!-- ============================================================= -->
+  <!-- LOGOUT CONFIRMATION MODAL                                     -->
+  <!-- ============================================================= -->
+  <div id="logoutConfirmModal" class="hidden fixed inset-0 z-[70] flex items-center justify-center p-4">
+    <div class="absolute inset-0 bg-black/50 backdrop-blur-sm" onclick="closeLogoutModal()"></div>
+
+    <div id="logoutConfirmPanel" class="relative w-full max-w-md bg-white rounded-2xl shadow-2xl animate-modal-in overflow-hidden">
+      <div class="h-1.5 w-full bg-gradient-to-r from-[#6A2C8A] via-[#8B1E7E] to-[#C43A7A]"></div>
+
+      <div class="px-6 pt-6 pb-2 flex flex-col items-center text-center">
+        <div class="w-16 h-16 rounded-full flex items-center justify-center mb-4 bg-gradient-to-br from-red-100 to-pink-100 ring-4 ring-red-50">
+          <i data-lucide="log-out" class="w-8 h-8 text-red-500"></i>
+        </div>
+
+        <h3 class="text-xl font-bold text-slate-800 mb-2">Log Out?</h3>
+
+        <p class="text-sm text-slate-500 leading-relaxed">
+          You are about to log out of <span class="font-bold text-[#8B1E7E] break-words"><?= e($displayName) ?></span>.
+          Any unsaved changes will be lost.
+        </p>
+
+        <p class="text-xs text-slate-400 font-medium mt-3 flex items-center gap-1.5">
+          <i data-lucide="info" class="w-3.5 h-3.5"></i> You can log back in anytime.
+        </p>
+      </div>
+
+      <div class="px-6 py-5 mt-2 flex flex-col-reverse sm:flex-row gap-3">
+        <button type="button" onclick="closeLogoutModal()"
+                class="flex-1 px-5 py-3 rounded-xl font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-200 transition-all duration-200 active:scale-95">
+          Cancel
+        </button>
+        <button type="button" id="confirmLogoutBtn"
+                class="flex-1 px-5 py-3 rounded-xl font-bold text-white bg-gradient-to-r from-red-500 via-red-600 to-rose-600 hover:from-red-600 hover:via-red-700 hover:to-rose-700 shadow-lg shadow-red-500/30 hover:shadow-red-500/50 transition-all duration-300 hover:-translate-y-0.5 active:scale-95 flex items-center justify-center gap-2">
+          <i data-lucide="log-out" class="w-4 h-4"></i>
+          <span>Log Out</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
   <script>
-    if (typeof lucide !== 'undefined') {
-      lucide.createIcons();
-    }
+    document.addEventListener('DOMContentLoaded', function () {
+
+      if (typeof lucide !== 'undefined') { lucide.createIcons(); }
+
+      // ---- Admin profile dropdown ----
+      (function () {
+        const btn       = document.getElementById('admin-dropdown-btn');
+        const menu      = document.getElementById('admin-dropdown-menu');
+        const chevron   = document.getElementById('admin-chevron');
+        const container = document.getElementById('admin-dropdown-container');
+        if (!btn || !menu || !container) return;
+
+        btn.addEventListener('click', function (e) {
+          e.stopPropagation();
+          const isOpen = !menu.classList.contains('hidden');
+          if (isOpen) {
+            menu.classList.add('hidden'); menu.classList.remove('animate-dropdown');
+            if (chevron) chevron.classList.remove('rotate-180');
+            btn.setAttribute('aria-expanded', 'false');
+          } else {
+            menu.classList.remove('hidden'); menu.classList.add('animate-dropdown');
+            if (chevron) chevron.classList.add('rotate-180');
+            btn.setAttribute('aria-expanded', 'true');
+          }
+        });
+
+        document.addEventListener('click', function (e) {
+          if (!container.contains(e.target)) {
+            menu.classList.add('hidden'); menu.classList.remove('animate-dropdown');
+            if (chevron) chevron.classList.remove('rotate-180');
+            btn.setAttribute('aria-expanded', 'false');
+          }
+        });
+
+        document.addEventListener('keydown', function (e) {
+          if (e.key === 'Escape') {
+            menu.classList.add('hidden'); menu.classList.remove('animate-dropdown');
+            if (chevron) chevron.classList.remove('rotate-180');
+            btn.setAttribute('aria-expanded', 'false');
+          }
+        });
+      })();
+
+      // ---- Logout Confirmation Modal ----
+      (function () {
+        const logoutConfirmModal = document.getElementById('logoutConfirmModal');
+        const logoutConfirmPanel = document.getElementById('logoutConfirmPanel');
+        const confirmLogoutBtn   = document.getElementById('confirmLogoutBtn');
+        const LOGOUT_URL         = '../logout.php?role=admin';
+
+        if (!logoutConfirmModal) return;
+
+        window.openLogoutModal = function () {
+          logoutConfirmModal.classList.remove('hidden');
+          document.body.classList.add('overflow-hidden');
+          if (logoutConfirmPanel) {
+            logoutConfirmPanel.classList.remove('animate-confirm-shake');
+            void logoutConfirmPanel.offsetWidth;
+            logoutConfirmPanel.classList.add('animate-confirm-shake');
+          }
+          setTimeout(function () { if (confirmLogoutBtn) confirmLogoutBtn.focus(); }, 80);
+          if (typeof lucide !== 'undefined') lucide.createIcons();
+        };
+        window.closeLogoutModal = function () {
+          logoutConfirmModal.classList.add('hidden');
+          document.body.classList.remove('overflow-hidden');
+        };
+
+        [document.getElementById('sidebarLogoutBtn'), document.getElementById('dropdownLogoutBtn')].forEach(function (btn) {
+          if (!btn) return;
+          btn.addEventListener('click', function (e) {
+            e.preventDefault();
+            e.stopPropagation();
+            window.openLogoutModal();
+          });
+        });
+
+        if (confirmLogoutBtn) {
+          confirmLogoutBtn.addEventListener('click', function () {
+            confirmLogoutBtn.classList.add('opacity-50', 'pointer-events-none');
+            window.location.href = LOGOUT_URL;
+          });
+        }
+
+        document.addEventListener('keydown', function (e) {
+          if (e.key === 'Escape' && !logoutConfirmModal.classList.contains('hidden')) {
+            window.closeLogoutModal();
+          }
+        });
+      })();
+
+    });
 
     // ---- Toggle Password Visibility ----
     function togglePasswordVisibility(inputId, btn) {
@@ -648,7 +833,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       };
 
       const score = Object.values(reqs).filter(Boolean).length;
-
       const percent = (score / 5) * 100;
       bar.style.width = percent + '%';
 
@@ -656,21 +840,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       text.classList.remove('text-red-500', 'text-yellow-500', 'text-blue-500', 'text-emerald-500');
 
       if (score <= 2) {
-        bar.classList.add('bg-red-500');
-        text.classList.add('text-red-500');
-        text.textContent = 'Weak';
+        bar.classList.add('bg-red-500'); text.classList.add('text-red-500'); text.textContent = 'Weak';
       } else if (score <= 3) {
-        bar.classList.add('bg-yellow-500');
-        text.classList.add('text-yellow-500');
-        text.textContent = 'Fair';
+        bar.classList.add('bg-yellow-500'); text.classList.add('text-yellow-500'); text.textContent = 'Fair';
       } else if (score <= 4) {
-        bar.classList.add('bg-blue-500');
-        text.classList.add('text-blue-500');
-        text.textContent = 'Good';
+        bar.classList.add('bg-blue-500'); text.classList.add('text-blue-500'); text.textContent = 'Good';
       } else {
-        bar.classList.add('bg-emerald-500');
-        text.classList.add('text-emerald-500');
-        text.textContent = 'Strong';
+        bar.classList.add('bg-emerald-500'); text.classList.add('text-emerald-500'); text.textContent = 'Strong';
       }
 
       document.querySelectorAll('.req-row').forEach(function (row) {
@@ -680,7 +856,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if (!key || !icon) return;
 
         const met = !!reqs[key];
-
         icon.setAttribute('data-lucide', met ? 'check-circle' : 'alert-circle');
         icon.classList.toggle('text-emerald-500', met);
         icon.classList.toggle('text-slate-300', !met);

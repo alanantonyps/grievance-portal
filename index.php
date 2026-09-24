@@ -11,13 +11,13 @@ require_once 'db_connect.php';
   <meta name="description" content="Rajagiri College of Social Sciences - Grievance Redressal Portal. Submit and track grievances securely.">
   <title>Rajagiri College of Social Sciences - Grievance Redressal Portal</title>
   <link rel="icon" type="image/svg+xml" href="public/favicon.svg">
-  
+
   <!-- Tailwind CSS CDN -->
   <script src="https://cdn.tailwindcss.com"></script>
-  
+
   <!-- Lucide Icons CDN -->
   <script src="https://unpkg.com/lucide@latest"></script>
-  
+
   <!-- Custom Tailwind Theme Config -->
   <script>
     tailwind.config = {
@@ -33,7 +33,7 @@ require_once 'db_connect.php';
       }
     }
   </script>
-  
+
   <!-- Local Page CSS Link -->
   <link rel="stylesheet" href="assets/css/index.css">
 </head>
@@ -65,21 +65,14 @@ require_once 'db_connect.php';
 
         <!-- Desktop Navigation -->
         <nav class="hidden md:flex items-center space-x-8">
-          <a 
-            href="#" 
-            class="relative text-slate-700 hover:text-[#006837] transition-colors text-sm font-semibold tracking-wide group"
-          >
-            UGC Guidelines
-            <span class="absolute -bottom-2 left-0 w-full h-0.5 bg-[#006837] transform scale-x-0 group-hover:scale-x-100 transition-transform duration-300 origin-left"></span>
-          </a>
-          <a 
-            href="#contact" 
+          <a
+            href="contact.php"
             class="relative text-slate-700 hover:text-[#006837] transition-colors text-sm font-semibold tracking-wide group"
           >
             Contact
             <span class="absolute -bottom-2 left-0 w-full h-0.5 bg-[#006837] transform scale-x-0 group-hover:scale-x-100 transition-transform duration-300 origin-left"></span>
           </a>
-          
+
           <!-- Login Dropdown -->
           <div class="relative" id="login-dropdown-container">
             <button
@@ -93,7 +86,7 @@ require_once 'db_connect.php';
               <span>Login</span>
               <i data-lucide="chevron-down" id="login-chevron" class="w-4 h-4 transition-transform duration-300"></i>
             </button>
-            
+
             <div id="login-dropdown-menu" class="hidden absolute right-0 mt-3 w-72 bg-white rounded-xl shadow-2xl border border-slate-200 z-50 py-2 overflow-hidden" role="menu">
               <div class="px-4 py-3 bg-gradient-to-r from-[#4A154B] to-[#8B1E7E]">
                 <p class="text-white text-xs font-bold uppercase tracking-wider">Login As</p>
@@ -164,13 +157,10 @@ require_once 'db_connect.php';
     <!-- Mobile Menu Drawer -->
     <div id="mobile-menu" class="hidden md:hidden bg-white border-t-2 border-slate-100 shadow-xl">
       <div class="px-4 py-4 space-y-2">
-        <a href="#" class="block text-slate-700 hover:text-[#006837] text-sm font-semibold px-4 py-3 hover:bg-slate-50 rounded-lg transition-colors">
-          UGC Guidelines
-        </a>
-        <a href="#contact" class="block text-slate-700 hover:text-[#006837] text-sm font-semibold px-4 py-3 hover:bg-slate-50 rounded-lg transition-colors">
+        <a href="contact.php" class="block text-slate-700 hover:text-[#006837] text-sm font-semibold px-4 py-3 hover:bg-slate-50 rounded-lg transition-colors">
           Contact
         </a>
-        
+
         <div class="border-t-2 border-slate-100 pt-3 mt-3">
           <p class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3 px-4">Login As</p>
           <a
@@ -218,11 +208,11 @@ require_once 'db_connect.php';
     <div class="absolute inset-0 opacity-10 pointer-events-none">
       <div class="absolute top-0 left-0 w-full h-full hero-radial-dots"></div>
     </div>
-    
+
     <div class="absolute top-20 left-10 w-72 h-72 bg-white/10 rounded-full blur-3xl pointer-events-none"></div>
     <div class="absolute bottom-20 right-10 w-96 h-96 bg-white/10 rounded-full blur-3xl pointer-events-none"></div>
     <div class="absolute top-1/3 right-1/4 w-48 h-48 bg-yellow-500/20 rounded-full blur-2xl pointer-events-none"></div>
-    
+
     <div class="absolute inset-0 opacity-5 hero-grid-lines pointer-events-none"></div>
 
     <div class="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-20 md:py-28">
@@ -231,7 +221,7 @@ require_once 'db_connect.php';
           <i data-lucide="sparkles" class="w-4 h-4 text-[#C5A059]"></i>
           <span class="text-white text-sm font-semibold tracking-wide">Powered by Oréll Grievance</span>
         </div>
-        
+
         <h1 class="text-4xl md:text-5xl lg:text-6xl font-bold text-white mb-6 leading-tight">
           Fair, Transparent & Prompt
           <br />
@@ -242,11 +232,11 @@ require_once 'db_connect.php';
             <span class="absolute -bottom-2 left-0 w-full h-1 bg-gradient-to-r from-transparent via-yellow-400 to-transparent"></span>
           </span>
         </h1>
-        
+
         <p class="text-lg md:text-xl text-white/95 mb-10 max-w-3xl mx-auto leading-relaxed">
           Your voice matters. Submit your concerns with confidence and track their resolution in real-time through our transparent and secure platform.
         </p>
-        
+
         <div class="flex flex-col sm:flex-row items-center justify-center gap-4">
           <button
             data-scroll-to="choose-portal"
@@ -259,7 +249,7 @@ require_once 'db_connect.php';
         </div>
       </div>
     </div>
-    
+
     <div class="absolute bottom-0 left-0 right-0 h-1 bg-gradient-to-r from-transparent via-yellow-400 to-transparent"></div>
   </section>
 
@@ -281,7 +271,7 @@ require_once 'db_connect.php';
       </div>
 
       <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-6">
-        
+
         <!-- Student Portal Card -->
         <a
           href="login.php?role=student"
@@ -291,7 +281,7 @@ require_once 'db_connect.php';
             <div class="absolute -top-8 -right-8 w-32 h-32 bg-white/10 rounded-full group-hover:scale-150 transition-transform duration-700"></div>
             <div class="absolute -bottom-8 -left-8 w-28 h-28 bg-white/10 rounded-full group-hover:scale-150 transition-transform duration-700 delay-75"></div>
             <div class="absolute top-1/2 right-1/4 w-16 h-16 bg-white/5 rounded-full group-hover:scale-125 transition-transform duration-500"></div>
-            
+
             <div class="relative">
               <div class="inline-flex items-center justify-center w-14 h-14 rounded-xl bg-white/20 backdrop-blur-sm mb-4 group-hover:bg-white/30 group-hover:scale-110 group-hover:rotate-6 transition-all duration-500 ring-1 ring-white/30">
                 <i data-lucide="graduation-cap" class="w-7 h-7"></i>
@@ -300,10 +290,10 @@ require_once 'db_connect.php';
               <p class="text-xs text-white/80 font-medium">View & Track Grievances</p>
             </div>
           </div>
-          
+
           <div class="p-6 relative">
             <div class="absolute inset-0 bg-gradient-to-br from-purple-50/0 to-pink-50/0 group-hover:from-purple-50/40 group-hover:to-pink-50/40 transition-all duration-500 pointer-events-none"></div>
-            
+
             <p class="text-slate-600 text-sm leading-relaxed mb-4 relative">
               Access grievance submission and tracking specifically for enrolled students
             </p>
@@ -316,7 +306,7 @@ require_once 'db_connect.php';
               </div>
             </div>
           </div>
-          
+
           <div class="absolute bottom-0 left-0 right-0 h-1 bg-gradient-to-r from-[#4A154B] via-[#8B1E7E] to-[#E5097F] transform scale-x-0 group-hover:scale-x-100 transition-transform duration-500 origin-left"></div>
         </a>
 
@@ -329,7 +319,7 @@ require_once 'db_connect.php';
             <div class="absolute -top-8 -right-8 w-32 h-32 bg-white/10 rounded-full group-hover:scale-150 transition-transform duration-700"></div>
             <div class="absolute -bottom-8 -left-8 w-28 h-28 bg-white/10 rounded-full group-hover:scale-150 transition-transform duration-700 delay-75"></div>
             <div class="absolute top-1/2 right-1/4 w-16 h-16 bg-white/5 rounded-full group-hover:scale-125 transition-transform duration-500"></div>
-            
+
             <div class="relative">
               <div class="inline-flex items-center justify-center w-14 h-14 rounded-xl bg-white/20 backdrop-blur-sm mb-4 group-hover:bg-white/30 group-hover:scale-110 group-hover:rotate-6 transition-all duration-500 ring-1 ring-white/30">
                 <i data-lucide="users" class="w-7 h-7"></i>
@@ -338,10 +328,10 @@ require_once 'db_connect.php';
               <p class="text-xs text-white/80 font-medium">Monitor Ward Progress</p>
             </div>
           </div>
-          
+
           <div class="p-6 relative">
             <div class="absolute inset-0 bg-gradient-to-br from-purple-50/0 to-pink-50/0 group-hover:from-purple-50/40 group-hover:to-pink-50/40 transition-all duration-500 pointer-events-none"></div>
-            
+
             <p class="text-slate-600 text-sm leading-relaxed mb-4 relative">
               Dedicated portal for parents to submit and monitor grievances regarding their wards
             </p>
@@ -354,7 +344,7 @@ require_once 'db_connect.php';
               </div>
             </div>
           </div>
-          
+
           <div class="absolute bottom-0 left-0 right-0 h-1 bg-gradient-to-r from-[#4A154B] via-[#8B1E7E] to-[#E5097F] transform scale-x-0 group-hover:scale-x-100 transition-transform duration-500 origin-left"></div>
         </a>
 
@@ -367,7 +357,7 @@ require_once 'db_connect.php';
             <div class="absolute -top-8 -right-8 w-32 h-32 bg-white/10 rounded-full group-hover:scale-150 transition-transform duration-700"></div>
             <div class="absolute -bottom-8 -left-8 w-28 h-28 bg-white/10 rounded-full group-hover:scale-150 transition-transform duration-700 delay-75"></div>
             <div class="absolute top-1/2 right-1/4 w-16 h-16 bg-white/5 rounded-full group-hover:scale-125 transition-transform duration-500"></div>
-            
+
             <div class="relative">
               <div class="inline-flex items-center justify-center w-14 h-14 rounded-xl bg-white/20 backdrop-blur-sm mb-4 group-hover:bg-white/30 group-hover:scale-110 group-hover:rotate-6 transition-all duration-500 ring-1 ring-white/30">
                 <i data-lucide="briefcase" class="w-7 h-7"></i>
@@ -376,10 +366,10 @@ require_once 'db_connect.php';
               <p class="text-xs text-white/80 font-medium">Priority Resolution</p>
             </div>
           </div>
-          
+
           <div class="p-6 relative">
             <div class="absolute inset-0 bg-gradient-to-br from-purple-50/0 to-pink-50/0 group-hover:from-purple-50/40 group-hover:to-pink-50/40 transition-all duration-500 pointer-events-none"></div>
-            
+
             <p class="text-slate-600 text-sm leading-relaxed mb-4 relative">
               Submit and manage grievances for teaching and non-teaching staff members
             </p>
@@ -392,7 +382,7 @@ require_once 'db_connect.php';
               </div>
             </div>
           </div>
-          
+
           <div class="absolute bottom-0 left-0 right-0 h-1 bg-gradient-to-r from-[#4A154B] via-[#8B1E7E] to-[#E5097F] transform scale-x-0 group-hover:scale-x-100 transition-transform duration-500 origin-left"></div>
         </a>
 
@@ -405,7 +395,7 @@ require_once 'db_connect.php';
             <div class="absolute -top-8 -right-8 w-32 h-32 bg-white/10 rounded-full group-hover:scale-150 transition-transform duration-700"></div>
             <div class="absolute -bottom-8 -left-8 w-28 h-28 bg-white/10 rounded-full group-hover:scale-150 transition-transform duration-700 delay-75"></div>
             <div class="absolute top-1/2 right-1/4 w-16 h-16 bg-white/5 rounded-full group-hover:scale-125 transition-transform duration-500"></div>
-            
+
             <div class="relative">
               <div class="inline-flex items-center justify-center w-14 h-14 rounded-xl bg-white/20 backdrop-blur-sm mb-4 group-hover:bg-white/30 group-hover:scale-110 group-hover:rotate-6 transition-all duration-500 ring-1 ring-white/30">
                 <i data-lucide="layers" class="w-7 h-7"></i>
@@ -414,10 +404,10 @@ require_once 'db_connect.php';
               <p class="text-xs text-white/80 font-medium">Committee Dashboard</p>
             </div>
           </div>
-          
+
           <div class="p-6 relative">
             <div class="absolute inset-0 bg-gradient-to-br from-purple-50/0 to-pink-50/0 group-hover:from-purple-50/40 group-hover:to-pink-50/40 transition-all duration-500 pointer-events-none"></div>
-            
+
             <p class="text-slate-600 text-sm leading-relaxed mb-4 relative">
               Administrative panel for grievance resolution, oversight, and committee management
             </p>
@@ -430,7 +420,7 @@ require_once 'db_connect.php';
               </div>
             </div>
           </div>
-          
+
           <div class="absolute bottom-0 left-0 right-0 h-1 bg-gradient-to-r from-[#4A154B] via-[#8B1E7E] to-[#E5097F] transform scale-x-0 group-hover:scale-x-100 transition-transform duration-500 origin-left"></div>
         </a>
 
@@ -443,7 +433,7 @@ require_once 'db_connect.php';
             <div class="absolute -top-8 -right-8 w-32 h-32 bg-white/10 rounded-full group-hover:scale-150 transition-transform duration-700"></div>
             <div class="absolute -bottom-8 -left-8 w-28 h-28 bg-white/10 rounded-full group-hover:scale-150 transition-transform duration-700 delay-75"></div>
             <div class="absolute top-1/2 right-1/4 w-16 h-16 bg-white/5 rounded-full group-hover:scale-125 transition-transform duration-500"></div>
-            
+
             <div class="relative">
               <div class="inline-flex items-center justify-center w-14 h-14 rounded-xl bg-white/20 backdrop-blur-sm mb-4 group-hover:bg-white/30 group-hover:scale-110 group-hover:rotate-6 transition-all duration-500 ring-1 ring-white/30">
                 <i data-lucide="lock" class="w-7 h-7"></i>
@@ -452,10 +442,10 @@ require_once 'db_connect.php';
               <p class="text-xs text-white/80 font-medium">Full System Control</p>
             </div>
           </div>
-          
+
           <div class="p-6 relative">
             <div class="absolute inset-0 bg-gradient-to-br from-purple-50/0 to-pink-50/0 group-hover:from-purple-50/40 group-hover:to-pink-50/40 transition-all duration-500 pointer-events-none"></div>
-            
+
             <p class="text-slate-600 text-sm leading-relaxed mb-4 relative">
               Super admin access for system configuration, user management, and global oversight
             </p>
@@ -468,7 +458,7 @@ require_once 'db_connect.php';
               </div>
             </div>
           </div>
-          
+
           <div class="absolute bottom-0 left-0 right-0 h-1 bg-gradient-to-r from-[#4A154B] via-[#8B1E7E] to-[#E5097F] transform scale-x-0 group-hover:scale-x-100 transition-transform duration-500 origin-left"></div>
         </a>
 
@@ -494,7 +484,7 @@ require_once 'db_connect.php';
       </div>
 
       <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-8">
-        
+
         <!-- Highlight 1 -->
         <div class="relative text-center p-8 rounded-2xl bg-gradient-to-b from-slate-50 to-white hover:shadow-2xl transition-all duration-300 border-2 border-slate-100 hover:border-[#8B1E7E] group">
           <div class="absolute top-4 right-4">
@@ -576,10 +566,10 @@ require_once 'db_connect.php';
   </section>
 
   <!-- Footer -->
-  <footer id="contact" class="bg-gradient-to-br from-[#4A154B] via-[#3a1040] to-[#2a0a30] text-white py-12 relative overflow-hidden scroll-mt-24">
+  <footer class="bg-gradient-to-br from-[#4A154B] via-[#3a1040] to-[#2a0a30] text-white py-12 relative overflow-hidden">
     <div class="absolute top-0 right-0 w-96 h-96 bg-[#E5097F]/10 rounded-full blur-3xl pointer-events-none"></div>
     <div class="absolute bottom-0 left-0 w-96 h-96 bg-[#006837]/10 rounded-full blur-3xl pointer-events-none"></div>
-    
+
     <div class="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
       <div class="grid grid-cols-1 md:grid-cols-3 gap-8 mb-8">
         <div>
@@ -599,34 +589,37 @@ require_once 'db_connect.php';
             Rajagiri College of Social Sciences - Committed to excellence in grievance redressal, powered by Oréll.
           </p>
         </div>
-        
+
         <div>
           <h4 class="font-bold mb-4 text-[#C5A059]">Quick Links</h4>
           <ul class="space-y-2 text-sm">
             <li>
-              <button 
-                data-scroll-to="choose-portal" 
-                class="text-slate-300 hover:text-[#E5097F] transition-colors text-left w-full flex items-center space-x-2 group cursor-pointer"
-              >
-                <i data-lucide="arrow-right" class="w-3 h-3 group-hover:translate-x-1 transition-transform"></i>
-                <span>File a Grievance</span>
-              </button>
-            </li>
-            <li>
               <a href="login.php?role=student" class="text-slate-300 hover:text-[#E5097F] transition-colors flex items-center space-x-2 group">
                 <i data-lucide="arrow-right" class="w-3 h-3 group-hover:translate-x-1 transition-transform"></i>
-                <span>Track Status</span>
+                <span>Student</span>
               </a>
             </li>
             <li>
-              <a href="#" class="text-slate-300 hover:text-[#E5097F] transition-colors flex items-center space-x-2 group">
+              <a href="login.php?role=parent" class="text-slate-300 hover:text-[#E5097F] transition-colors flex items-center space-x-2 group">
                 <i data-lucide="arrow-right" class="w-3 h-3 group-hover:translate-x-1 transition-transform"></i>
-                <span>UGC Guidelines</span>
+                <span>Parent</span>
+              </a>
+            </li>
+            <li>
+              <a href="login.php?role=staff" class="text-slate-300 hover:text-[#E5097F] transition-colors flex items-center space-x-2 group">
+                <i data-lucide="arrow-right" class="w-3 h-3 group-hover:translate-x-1 transition-transform"></i>
+                <span>Staff</span>
+              </a>
+            </li>
+            <li>
+              <a href="login.php?role=management" class="text-slate-300 hover:text-[#E5097F] transition-colors flex items-center space-x-2 group">
+                <i data-lucide="arrow-right" class="w-3 h-3 group-hover:translate-x-1 transition-transform"></i>
+                <span>Grievance Member</span>
               </a>
             </li>
           </ul>
         </div>
-        
+
         <div>
           <h4 class="font-bold mb-4 text-[#C5A059]">Contact</h4>
           <ul class="space-y-3 text-sm text-slate-300">
@@ -645,7 +638,7 @@ require_once 'db_connect.php';
           </ul>
         </div>
       </div>
-      
+
       <div class="border-t border-white/10 pt-8 text-center text-sm text-slate-400">
         <p>&copy; <?php echo date('Y'); ?> Rajagiri College of Social Sciences. All rights reserved.</p>
       </div>

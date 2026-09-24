@@ -11,6 +11,7 @@
  *   • Toggle status (Active / Inactive)
  *   • Live search + entries-per-page dropdown
  *   • Themed delete & toggle confirmation modals
+ *   • Themed logout confirmation modal
  *   • Flash messages auto-dismiss after 3 seconds
  * ---------------------------------------------------------------------------
  */
@@ -70,7 +71,7 @@ if (!file_exists($dbFile)) {
 }
 
 // ---------------------------------------------------------------------------
-// 4. HELPERS
+// 4. HELPER
 // ---------------------------------------------------------------------------
 function e(?string $v): string
 {
@@ -78,7 +79,7 @@ function e(?string $v): string
 }
 
 // ---------------------------------------------------------------------------
-// 5. FETCH ADMIN PROFILE (for header)
+// 5. FETCH ADMIN PROFILE
 // ---------------------------------------------------------------------------
 $adminData = [
     'username'        => $_SESSION['username'] ?? 'Admin',
@@ -226,7 +227,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $conn instanceof mysqli) {
         $departmentId = (int) ($_POST['department_id'] ?? 0);
         if ($departmentId > 0) {
             try {
-                // Fetch current status
                 $stmtG = $conn->prepare("SELECT status FROM departments WHERE id = ? LIMIT 1");
                 $stmtG->bind_param('i', $departmentId);
                 $stmtG->execute();
@@ -308,33 +308,12 @@ if ($conn instanceof mysqli) {
             brandGold:   '#C5A059'
           },
           keyframes: {
-            fadeInUp: {
-              '0%':   { opacity: '0', transform: 'translateY(12px)' },
-              '100%': { opacity: '1', transform: 'translateY(0)' }
-            },
-            dropdownFade: {
-              '0%':   { opacity: '0', transform: 'translateY(-8px) scale(0.98)' },
-              '100%': { opacity: '1', transform: 'translateY(0) scale(1)' }
-            },
-            modalFadeIn: {
-              '0%':   { opacity: '0', transform: 'scale(0.96)' },
-              '100%': { opacity: '1', transform: 'scale(1)' }
-            },
-            confirmShake: {
-              '0%, 100%': { transform: 'translateX(0)' },
-              '20%':      { transform: 'translateX(-6px)' },
-              '40%':      { transform: 'translateX(6px)' },
-              '60%':      { transform: 'translateX(-4px)' },
-              '80%':      { transform: 'translateX(4px)' }
-            },
-            flashIn: {
-              '0%':   { opacity: '0', transform: 'translateY(-10px)' },
-              '100%': { opacity: '1', transform: 'translateY(0)' }
-            },
-            flashOut: {
-              '0%':   { opacity: '1', transform: 'translateY(0)', maxHeight: '200px' },
-              '100%': { opacity: '0', transform: 'translateY(-10px)', maxHeight: '0px' }
-            }
+            fadeInUp: { '0%': { opacity: '0', transform: 'translateY(12px)' }, '100%': { opacity: '1', transform: 'translateY(0)' } },
+            dropdownFade: { '0%': { opacity: '0', transform: 'translateY(-8px) scale(0.98)' }, '100%': { opacity: '1', transform: 'translateY(0) scale(1)' } },
+            modalFadeIn: { '0%': { opacity: '0', transform: 'scale(0.96)' }, '100%': { opacity: '1', transform: 'scale(1)' } },
+            confirmShake: { '0%, 100%': { transform: 'translateX(0)' }, '20%': { transform: 'translateX(-6px)' }, '40%': { transform: 'translateX(6px)' }, '60%': { transform: 'translateX(-4px)' }, '80%': { transform: 'translateX(4px)' } },
+            flashIn: { '0%': { opacity: '0', transform: 'translateY(-10px)' }, '100%': { opacity: '1', transform: 'translateY(0)' } },
+            flashOut: { '0%': { opacity: '1', transform: 'translateY(0)', maxHeight: '200px' }, '100%': { opacity: '0', transform: 'translateY(-10px)', maxHeight: '0px' } }
           },
           animation: {
             'fade-in-up': 'fadeInUp 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards',
@@ -356,9 +335,7 @@ if ($conn instanceof mysqli) {
 
   <div class="flex min-h-screen flex-1">
 
-    <!-- ============================================================
-         SIDEBAR
-         ============================================================ -->
+    <!-- SIDEBAR -->
     <aside class="w-20 bg-gradient-to-b from-[#4A154B] via-[#5A1B5C] to-[#006837] flex flex-col items-center py-4 shadow-2xl fixed inset-y-0 left-0 z-40">
 
       <button class="text-white/80 hover:text-white mb-8 p-2 rounded-lg hover:bg-white/10 transition-colors" aria-label="Toggle sidebar">
@@ -371,49 +348,39 @@ if ($conn instanceof mysqli) {
            class="group relative w-12 h-12 rounded-xl bg-white/10 hover:bg-white/20 flex items-center justify-center text-white transition-all hover:scale-110"
            title="Dashboard">
           <i data-lucide="home" class="w-6 h-6"></i>
-          <span class="absolute left-full ml-3 hidden group-hover:block whitespace-nowrap bg-[#4A154B] text-white text-xs px-3 py-1.5 rounded-lg shadow-lg z-50">
-            Dashboard
-          </span>
+          <span class="absolute left-full ml-3 hidden group-hover:block whitespace-nowrap bg-[#4A154B] text-white text-xs px-3 py-1.5 rounded-lg shadow-lg z-50">Dashboard</span>
         </a>
 
         <a href="profile.php"
            class="group relative w-12 h-12 rounded-xl bg-white/10 hover:bg-white/20 flex items-center justify-center text-white transition-all hover:scale-110"
            title="Profile">
           <i data-lucide="user" class="w-6 h-6"></i>
-          <span class="absolute left-full ml-3 hidden group-hover:block whitespace-nowrap bg-[#4A154B] text-white text-xs px-3 py-1.5 rounded-lg shadow-lg z-50">
-            Profile
-          </span>
+          <span class="absolute left-full ml-3 hidden group-hover:block whitespace-nowrap bg-[#4A154B] text-white text-xs px-3 py-1.5 rounded-lg shadow-lg z-50">Profile</span>
         </a>
 
         <a href="settings.php"
            class="group relative w-12 h-12 rounded-xl bg-white/10 hover:bg-white/20 flex items-center justify-center text-white transition-all hover:scale-110"
            title="Settings">
           <i data-lucide="settings" class="w-6 h-6 group-hover:rotate-90 transition-transform duration-500"></i>
-          <span class="absolute left-full ml-3 hidden group-hover:block whitespace-nowrap bg-[#4A154B] text-white text-xs px-3 py-1.5 rounded-lg shadow-lg z-50">
-            Settings
-          </span>
+          <span class="absolute left-full ml-3 hidden group-hover:block whitespace-nowrap bg-[#4A154B] text-white text-xs px-3 py-1.5 rounded-lg shadow-lg z-50">Settings</span>
         </a>
 
       </nav>
 
-      <a href="../logout.php?role=admin"
+      <!-- Logout Trigger -->
+      <a href="#" data-logout-trigger="1"
          id="sidebarLogoutBtn"
          class="group relative w-12 h-12 rounded-xl bg-white/10 hover:bg-red-500/40 flex items-center justify-center text-white transition-all hover:scale-110"
          title="Logout">
         <i data-lucide="log-out" class="w-6 h-6 group-hover:translate-x-0.5 transition-transform"></i>
-        <span class="absolute left-full ml-3 hidden group-hover:block whitespace-nowrap bg-red-600 text-white text-xs px-3 py-1.5 rounded-lg shadow-lg z-50">
-          Logout
-        </span>
+        <span class="absolute left-full ml-3 hidden group-hover:block whitespace-nowrap bg-red-600 text-white text-xs px-3 py-1.5 rounded-lg shadow-lg z-50">Logout</span>
       </a>
 
     </aside>
 
-    <!-- ============================================================
-         MAIN CONTENT
-         ============================================================ -->
+    <!-- MAIN CONTENT -->
     <div class="flex-1 ml-20 flex flex-col min-h-screen">
 
-      <!-- ============ TOP HEADER ============ -->
       <header class="bg-white border-b border-slate-200 shadow-sm sticky top-0 z-30">
         <div class="flex items-center justify-between px-6 py-4">
 
@@ -496,7 +463,9 @@ if ($conn instanceof mysqli) {
               </a>
 
               <div class="border-t border-slate-100 mt-2 pt-2">
-                <a href="../logout.php?role=admin" id="dropdownLogoutBtn" class="flex items-center px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 transition-all duration-200 group/item">
+                <a href="#" data-logout-trigger="1"
+                   id="dropdownLogoutBtn"
+                   class="flex items-center px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 transition-all duration-200 group/item">
                   <i data-lucide="log-out" class="w-4 h-4 mr-3 group-hover/item:scale-110 transition-transform"></i>
                   <span class="font-medium">Logout</span>
                 </a>
@@ -507,26 +476,19 @@ if ($conn instanceof mysqli) {
         </div>
       </header>
 
-      <!-- ============ PAGE CONTENT ============ -->
       <main class="flex-1 px-6 py-8">
 
-        <!-- Breadcrumb + Action Button -->
         <div class="max-w-6xl mx-auto mb-6 animate-fade-in-up">
           <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
 
             <div>
-              <h1 class="text-2xl md:text-3xl font-bold text-slate-800 mb-2 tracking-tight">
-                Department
-              </h1>
+              <h1 class="text-2xl md:text-3xl font-bold text-slate-800 mb-2 tracking-tight">Department</h1>
               <nav class="flex items-center space-x-2 text-sm text-slate-500">
                 <a href="dashboard.php" class="flex items-center hover:text-[#8B1E7E] transition-colors">
-                  <i data-lucide="layout-dashboard" class="w-4 h-4 mr-1"></i>
-                  Dashboard
+                  <i data-lucide="layout-dashboard" class="w-4 h-4 mr-1"></i> Dashboard
                 </a>
                 <span class="text-slate-300">/</span>
-                <a href="settings.php" class="hover:text-[#8B1E7E] transition-colors">
-                  Settings
-                </a>
+                <a href="settings.php" class="hover:text-[#8B1E7E] transition-colors">Settings</a>
                 <span class="text-slate-300">/</span>
                 <span class="text-[#E5097F] font-semibold">Department</span>
               </nav>
@@ -544,7 +506,6 @@ if ($conn instanceof mysqli) {
           </div>
         </div>
 
-        <!-- Flash Messages -->
         <?php if ($flashSuccess !== ''): ?>
           <div id="flashSuccessBox"
                class="max-w-6xl mx-auto mb-6 rounded-xl border-2 border-emerald-200 bg-emerald-50 px-4 py-3 flex items-start space-x-2 animate-flash-in overflow-hidden">
@@ -561,7 +522,6 @@ if ($conn instanceof mysqli) {
           </div>
         <?php endif; ?>
 
-        <!-- ============ TABLE CONTROLS ============ -->
         <div class="max-w-6xl mx-auto mb-5 animate-fade-in-up" style="animation-delay: 60ms;">
           <div class="bg-white rounded-xl shadow-sm border border-slate-200/70 px-5 py-4">
             <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -582,9 +542,7 @@ if ($conn instanceof mysqli) {
 
               <div class="relative w-full sm:w-80">
                 <i data-lucide="search" class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400"></i>
-                <input type="text"
-                       id="searchInput"
-                       placeholder="Search.."
+                <input type="text" id="searchInput" placeholder="Search.."
                        class="w-full pl-10 pr-4 py-2 border-2 border-slate-200 rounded-lg text-sm
                               focus:outline-none focus:border-[#4A154B] focus:ring-4 focus:ring-[#4A154B]/10
                               hover:border-[#4A154B]/40 transition-all bg-white" />
@@ -594,7 +552,6 @@ if ($conn instanceof mysqli) {
           </div>
         </div>
 
-        <!-- ============ DATA TABLE ============ -->
         <div class="max-w-6xl mx-auto animate-fade-in-up" style="animation-delay: 100ms;">
           <div class="bg-white rounded-2xl shadow-lg border border-slate-200/70 overflow-hidden">
 
@@ -612,7 +569,6 @@ if ($conn instanceof mysqli) {
                 <tbody class="divide-y divide-slate-100" id="departmentsTableBody">
 
                   <?php if (empty($departments)): ?>
-
                     <tr>
                       <td colspan="5" class="px-6 py-16 text-center text-slate-500">
                         <div class="flex flex-col items-center justify-center">
@@ -626,7 +582,6 @@ if ($conn instanceof mysqli) {
                         </div>
                       </td>
                     </tr>
-
                   <?php else: ?>
 
                     <?php foreach ($departments as $index => $department): ?>
@@ -642,12 +597,8 @@ if ($conn instanceof mysqli) {
                           : 'bg-slate-100 text-slate-700 border-slate-200';
                       ?>
                       <tr class="hover:bg-slate-50/80 transition-colors group">
-                        <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-slate-900">
-                          <?= $index + 1 ?>
-                        </td>
-                        <td class="px-6 py-4 text-sm font-semibold text-slate-800">
-                          <?= e($departmentName) ?>
-                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-slate-900"><?= $index + 1 ?></td>
+                        <td class="px-6 py-4 text-sm font-semibold text-slate-800"><?= e($departmentName) ?></td>
                         <td class="px-6 py-4 text-sm text-slate-600 max-w-[320px]">
                           <?= e($departmentDesc !== '' ? $departmentDesc : '—') ?>
                         </td>
@@ -659,7 +610,6 @@ if ($conn instanceof mysqli) {
                         <td class="px-6 py-4 whitespace-nowrap">
                           <div class="flex items-center justify-center gap-1.5">
 
-                            <!-- Edit -->
                             <button type="button"
                                     title="Edit department"
                                     onclick='openDepartmentModal("edit", <?= $departmentId ?>, <?= json_encode($departmentName) ?>, <?= json_encode($departmentDesc) ?>, <?= json_encode($status) ?>)'
@@ -669,7 +619,6 @@ if ($conn instanceof mysqli) {
                               <i data-lucide="pencil" class="w-4 h-4"></i>
                             </button>
 
-                            <!-- Delete -->
                             <button type="button"
                                     title="Delete department"
                                     onclick='confirmDeleteDepartment(<?= $departmentId ?>, <?= json_encode($departmentName) ?>)'
@@ -679,7 +628,6 @@ if ($conn instanceof mysqli) {
                               <i data-lucide="trash-2" class="w-4 h-4"></i>
                             </button>
 
-                            <!-- Toggle Status -->
                             <button type="button"
                                     title="<?= $isActive ? 'Deactivate department' : 'Activate department' ?>"
                                     onclick='confirmToggleStatus(<?= $departmentId ?>, <?= json_encode($departmentName) ?>, <?= json_encode($status) ?>)'
@@ -700,34 +648,18 @@ if ($conn instanceof mysqli) {
               </table>
             </div>
 
-            <!-- Footer Info & Pagination -->
             <?php if (!empty($departments)): ?>
               <div class="px-6 py-4 bg-slate-50/50 border-t border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-4">
-
                 <p class="text-sm text-slate-600" id="tableInfo">
                   Showing <span class="font-semibold text-slate-900">1</span> to
                   <span class="font-semibold text-slate-900"><?= count($departments) ?></span> of
                   <span class="font-semibold text-slate-900"><?= count($departments) ?></span> entries
                 </p>
-
                 <div class="flex items-center space-x-2">
-                  <button type="button"
-                          class="px-4 py-2 rounded-lg text-sm font-medium text-slate-500 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-                          disabled>
-                    Previous
-                  </button>
-
-                  <span class="inline-flex items-center justify-center w-9 h-9 rounded-lg bg-[#4A154B] text-white text-sm font-bold shadow-md">
-                    1
-                  </span>
-
-                  <button type="button"
-                          class="px-4 py-2 rounded-lg text-sm font-medium text-slate-500 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-                          disabled>
-                    Next
-                  </button>
+                  <button type="button" class="px-4 py-2 rounded-lg text-sm font-medium text-slate-500 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors" disabled>Previous</button>
+                  <span class="inline-flex items-center justify-center w-9 h-9 rounded-lg bg-[#4A154B] text-white text-sm font-bold shadow-md">1</span>
+                  <button type="button" class="px-4 py-2 rounded-lg text-sm font-medium text-slate-500 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors" disabled>Next</button>
                 </div>
-
               </div>
             <?php endif; ?>
 
@@ -736,7 +668,6 @@ if ($conn instanceof mysqli) {
 
       </main>
 
-      <!-- ============ FOOTER ============ -->
       <footer class="bg-gradient-to-r from-purple-200 via-pink-100 to-purple-200 border-t border-purple-200/60 mt-auto">
         <div class="px-6 py-6">
           <div class="max-w-7xl mx-auto text-center">
@@ -747,9 +678,7 @@ if ($conn instanceof mysqli) {
             </p>
             <p class="text-xs text-slate-700 mt-1">
               Powered by
-              <span class="font-bold bg-gradient-to-r from-[#4A154B] to-[#E5097F] bg-clip-text text-transparent ml-1">
-                Orell
-              </span>
+              <span class="font-bold bg-gradient-to-r from-[#4A154B] to-[#E5097F] bg-clip-text text-transparent ml-1">Orell</span>
             </p>
           </div>
         </div>
@@ -758,14 +687,11 @@ if ($conn instanceof mysqli) {
     </div>
   </div>
 
-  <!-- ============================================================
-       ADD / EDIT DEPARTMENT MODAL
-       ============================================================ -->
+  <!-- ADD / EDIT DEPARTMENT MODAL -->
   <div id="departmentModal" class="hidden fixed inset-0 z-[60] flex items-center justify-center p-4">
     <div class="absolute inset-0 bg-black/40 backdrop-blur-sm" onclick="closeDepartmentModal()"></div>
 
     <div class="relative w-full max-w-lg bg-white rounded-2xl shadow-2xl animate-modal-in overflow-hidden">
-
       <div class="h-1.5 w-full bg-gradient-to-r from-[#6A2C8A] via-[#8B1E7E] to-[#C43A7A]"></div>
 
       <div class="flex items-center justify-between px-6 py-4 border-b border-slate-100">
@@ -781,33 +707,23 @@ if ($conn instanceof mysqli) {
         <input type="hidden" name="department_id" id="formDepartmentId" value="" />
 
         <div class="space-y-2">
-          <label for="department_name" class="block text-sm font-semibold text-slate-700">
-            Department Name <span class="text-[#E5097F]">*</span>
-          </label>
-          <input type="text" name="department_name" id="department_name" required
-                 placeholder="e.g. Computer Science"
-                 class="w-full px-4 py-3 border-2 border-slate-200 rounded-xl bg-white text-slate-800 font-medium
-                        placeholder-slate-400
+          <label for="department_name" class="block text-sm font-semibold text-slate-700">Department Name <span class="text-[#E5097F]">*</span></label>
+          <input type="text" name="department_name" id="department_name" required placeholder="e.g. Computer Science"
+                 class="w-full px-4 py-3 border-2 border-slate-200 rounded-xl bg-white text-slate-800 font-medium placeholder-slate-400
                         focus:outline-none focus:border-[#4A154B] focus:ring-4 focus:ring-[#4A154B]/10
                         hover:border-[#4A154B]/40 transition-all" />
         </div>
 
         <div class="space-y-2">
-          <label for="description" class="block text-sm font-semibold text-slate-700">
-            Description
-          </label>
-          <textarea name="description" id="description" rows="3"
-                    placeholder="e.g. Department of Computer Science"
-                    class="w-full px-4 py-3 border-2 border-slate-200 rounded-xl bg-white text-slate-800 font-medium
-                           placeholder-slate-400 resize-none
+          <label for="description" class="block text-sm font-semibold text-slate-700">Description</label>
+          <textarea name="description" id="description" rows="3" placeholder="e.g. Department of Computer Science"
+                    class="w-full px-4 py-3 border-2 border-slate-200 rounded-xl bg-white text-slate-800 font-medium placeholder-slate-400 resize-none
                            focus:outline-none focus:border-[#4A154B] focus:ring-4 focus:ring-[#4A154B]/10
                            hover:border-[#4A154B]/40 transition-all"></textarea>
         </div>
 
         <div class="space-y-2" id="statusFieldWrapper" style="display: none;">
-          <label for="status" class="block text-sm font-semibold text-slate-700">
-            Status <span class="text-[#E5097F]">*</span>
-          </label>
+          <label for="status" class="block text-sm font-semibold text-slate-700">Status <span class="text-[#E5097F]">*</span></label>
           <select name="status" id="status"
                   class="w-full px-4 py-3 border-2 border-slate-200 rounded-xl appearance-none bg-white text-slate-800 font-medium
                          focus:outline-none focus:border-[#4A154B] focus:ring-4 focus:ring-[#4A154B]/10
@@ -818,41 +734,29 @@ if ($conn instanceof mysqli) {
         </div>
 
         <div class="flex justify-center pt-3 gap-3">
-          <button type="button"
-                  onclick="closeDepartmentModal()"
-                  class="px-6 py-3 rounded-xl font-semibold text-slate-700
-                         bg-slate-100 hover:bg-slate-200 border border-slate-200
-                         transition-all duration-200 active:scale-95">
+          <button type="button" onclick="closeDepartmentModal()"
+                  class="px-6 py-3 rounded-xl font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-200 transition-all duration-200 active:scale-95">
             Cancel
           </button>
           <button type="submit"
-                  class="px-8 py-3 rounded-xl
-                         bg-gradient-to-r from-[#6A2C8A] via-[#8B1E7E] to-[#C43A7A]
-                         hover:from-[#5A1C7A] hover:via-[#7B0E6E] hover:to-[#B42A6A]
-                         text-white font-bold shadow-lg shadow-purple-500/30 hover:shadow-purple-500/50
-                         transition-all duration-300 hover:-translate-y-0.5 active:scale-95">
+                  class="px-8 py-3 rounded-xl bg-gradient-to-r from-[#6A2C8A] via-[#8B1E7E] to-[#C43A7A] hover:from-[#5A1C7A] hover:via-[#7B0E6E] hover:to-[#B42A6A] text-white font-bold shadow-lg shadow-purple-500/30 hover:shadow-purple-500/50 transition-all duration-300 hover:-translate-y-0.5 active:scale-95">
             Save
           </button>
         </div>
       </form>
-
     </div>
   </div>
 
-  <!-- ============================================================= -->
-  <!-- CUSTOM DELETE CONFIRMATION MODAL                              -->
-  <!-- ============================================================= -->
+  <!-- DELETE CONFIRMATION MODAL -->
   <div id="deleteConfirmModal" class="hidden fixed inset-0 z-[70] flex items-center justify-center p-4">
     <div class="absolute inset-0 bg-black/50 backdrop-blur-sm" onclick="closeDeleteModal()"></div>
 
     <div id="deleteConfirmPanel"
          class="relative w-full max-w-md bg-white rounded-2xl shadow-2xl animate-modal-in overflow-hidden">
-
       <div class="h-1.5 w-full bg-gradient-to-r from-[#6A2C8A] via-[#8B1E7E] to-[#C43A7A]"></div>
 
       <div class="px-6 pt-6 pb-2 flex flex-col items-center text-center">
-        <div class="w-16 h-16 rounded-full flex items-center justify-center mb-4
-                    bg-gradient-to-br from-red-100 to-pink-100 ring-4 ring-red-50">
+        <div class="w-16 h-16 rounded-full flex items-center justify-center mb-4 bg-gradient-to-br from-red-100 to-pink-100 ring-4 ring-red-50">
           <i data-lucide="trash-2" class="w-8 h-8 text-red-500"></i>
         </div>
 
@@ -860,8 +764,7 @@ if ($conn instanceof mysqli) {
 
         <p class="text-sm text-slate-500 leading-relaxed">
           You are about to permanently delete
-          <span id="deleteDepartmentNameDisplay"
-                class="font-bold text-[#8B1E7E] break-words">this department</span>.
+          <span id="deleteDepartmentNameDisplay" class="font-bold text-[#8B1E7E] break-words">this department</span>.
         </p>
 
         <p class="text-xs text-red-500 font-medium mt-3 flex items-center gap-1.5">
@@ -871,44 +774,29 @@ if ($conn instanceof mysqli) {
       </div>
 
       <div class="px-6 py-5 mt-2 flex flex-col-reverse sm:flex-row gap-3">
-        <button type="button"
-                onclick="closeDeleteModal()"
-                class="flex-1 px-5 py-3 rounded-xl font-semibold text-slate-700
-                       bg-slate-100 hover:bg-slate-200 border border-slate-200
-                       transition-all duration-200 active:scale-95">
+        <button type="button" onclick="closeDeleteModal()"
+                class="flex-1 px-5 py-3 rounded-xl font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-200 transition-all duration-200 active:scale-95">
           Cancel
         </button>
-
-        <button type="button"
-                id="confirmDeleteBtn"
-                class="flex-1 px-5 py-3 rounded-xl font-bold text-white
-                       bg-gradient-to-r from-red-500 via-red-600 to-rose-600
-                       hover:from-red-600 hover:via-red-700 hover:to-rose-700
-                       shadow-lg shadow-red-500/30 hover:shadow-red-500/50
-                       transition-all duration-300 hover:-translate-y-0.5 active:scale-95
-                       flex items-center justify-center gap-2">
+        <button type="button" id="confirmDeleteBtn"
+                class="flex-1 px-5 py-3 rounded-xl font-bold text-white bg-gradient-to-r from-red-500 via-red-600 to-rose-600 hover:from-red-600 hover:via-red-700 hover:to-rose-700 shadow-lg shadow-red-500/30 hover:shadow-red-500/50 transition-all duration-300 hover:-translate-y-0.5 active:scale-95 flex items-center justify-center gap-2">
           <i data-lucide="trash-2" class="w-4 h-4"></i>
           <span>Delete</span>
         </button>
       </div>
-
     </div>
   </div>
 
-  <!-- ============================================================= -->
-  <!-- CUSTOM TOGGLE STATUS CONFIRMATION MODAL                       -->
-  <!-- ============================================================= -->
+  <!-- TOGGLE STATUS CONFIRMATION MODAL -->
   <div id="toggleConfirmModal" class="hidden fixed inset-0 z-[70] flex items-center justify-center p-4">
     <div class="absolute inset-0 bg-black/50 backdrop-blur-sm" onclick="closeToggleModal()"></div>
 
     <div id="toggleConfirmPanel"
          class="relative w-full max-w-md bg-white rounded-2xl shadow-2xl animate-modal-in overflow-hidden">
-
       <div class="h-1.5 w-full bg-gradient-to-r from-[#6A2C8A] via-[#8B1E7E] to-[#C43A7A]"></div>
 
       <div class="px-6 pt-6 pb-2 flex flex-col items-center text-center">
-        <div class="w-16 h-16 rounded-full flex items-center justify-center mb-4
-                    bg-gradient-to-br from-purple-100 to-pink-100 ring-4 ring-purple-50">
+        <div class="w-16 h-16 rounded-full flex items-center justify-center mb-4 bg-gradient-to-br from-purple-100 to-pink-100 ring-4 ring-purple-50">
           <i id="toggleIcon" data-lucide="power" class="w-8 h-8 text-[#8B1E7E]"></i>
         </div>
 
@@ -922,27 +810,56 @@ if ($conn instanceof mysqli) {
       </div>
 
       <div class="px-6 py-5 mt-2 flex flex-col-reverse sm:flex-row gap-3">
-        <button type="button"
-                onclick="closeToggleModal()"
-                class="flex-1 px-5 py-3 rounded-xl font-semibold text-slate-700
-                       bg-slate-100 hover:bg-slate-200 border border-slate-200
-                       transition-all duration-200 active:scale-95">
+        <button type="button" onclick="closeToggleModal()"
+                class="flex-1 px-5 py-3 rounded-xl font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-200 transition-all duration-200 active:scale-95">
           Cancel
         </button>
-
-        <button type="button"
-                id="confirmToggleBtn"
-                class="flex-1 px-5 py-3 rounded-xl font-bold text-white
-                       bg-gradient-to-r from-[#6A2C8A] via-[#8B1E7E] to-[#C43A7A]
-                       hover:from-[#5A1C7A] hover:via-[#7B0E6E] hover:to-[#B42A6A]
-                       shadow-lg shadow-purple-500/30 hover:shadow-purple-500/50
-                       transition-all duration-300 hover:-translate-y-0.5 active:scale-95
-                       flex items-center justify-center gap-2">
+        <button type="button" id="confirmToggleBtn"
+                class="flex-1 px-5 py-3 rounded-xl font-bold text-white bg-gradient-to-r from-[#6A2C8A] via-[#8B1E7E] to-[#C43A7A] hover:from-[#5A1C7A] hover:via-[#7B0E6E] hover:to-[#B42A6A] shadow-lg shadow-purple-500/30 hover:shadow-purple-500/50 transition-all duration-300 hover:-translate-y-0.5 active:scale-95 flex items-center justify-center gap-2">
           <i data-lucide="refresh-cw" class="w-4 h-4"></i>
           <span id="confirmToggleBtnLabel">Confirm</span>
         </button>
       </div>
+    </div>
+  </div>
 
+  <!-- ============================================================= -->
+  <!-- LOGOUT CONFIRMATION MODAL                                     -->
+  <!-- ============================================================= -->
+  <div id="logoutConfirmModal" class="hidden fixed inset-0 z-[70] flex items-center justify-center p-4">
+    <div class="absolute inset-0 bg-black/50 backdrop-blur-sm" onclick="closeLogoutModal()"></div>
+
+    <div id="logoutConfirmPanel" class="relative w-full max-w-md bg-white rounded-2xl shadow-2xl animate-modal-in overflow-hidden">
+      <div class="h-1.5 w-full bg-gradient-to-r from-[#6A2C8A] via-[#8B1E7E] to-[#C43A7A]"></div>
+
+      <div class="px-6 pt-6 pb-2 flex flex-col items-center text-center">
+        <div class="w-16 h-16 rounded-full flex items-center justify-center mb-4 bg-gradient-to-br from-red-100 to-pink-100 ring-4 ring-red-50">
+          <i data-lucide="log-out" class="w-8 h-8 text-red-500"></i>
+        </div>
+
+        <h3 class="text-xl font-bold text-slate-800 mb-2">Log Out?</h3>
+
+        <p class="text-sm text-slate-500 leading-relaxed">
+          You are about to log out of <span class="font-bold text-[#8B1E7E] break-words"><?= e($displayName) ?></span>.
+          Any unsaved changes will be lost.
+        </p>
+
+        <p class="text-xs text-slate-400 font-medium mt-3 flex items-center gap-1.5">
+          <i data-lucide="info" class="w-3.5 h-3.5"></i> You can log back in anytime.
+        </p>
+      </div>
+
+      <div class="px-6 py-5 mt-2 flex flex-col-reverse sm:flex-row gap-3">
+        <button type="button" onclick="closeLogoutModal()"
+                class="flex-1 px-5 py-3 rounded-xl font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-200 transition-all duration-200 active:scale-95">
+          Cancel
+        </button>
+        <button type="button" id="confirmLogoutBtn"
+                class="flex-1 px-5 py-3 rounded-xl font-bold text-white bg-gradient-to-r from-red-500 via-red-600 to-rose-600 hover:from-red-600 hover:via-red-700 hover:to-rose-700 shadow-lg shadow-red-500/30 hover:shadow-red-500/50 transition-all duration-300 hover:-translate-y-0.5 active:scale-95 flex items-center justify-center gap-2">
+          <i data-lucide="log-out" class="w-4 h-4"></i>
+          <span>Log Out</span>
+        </button>
+      </div>
     </div>
   </div>
 
@@ -958,320 +875,290 @@ if ($conn instanceof mysqli) {
   </form>
 
   <script>
-    if (typeof lucide !== 'undefined') {
-      lucide.createIcons();
-    }
-
-    // ---- Auto-dismiss flash messages after 3 seconds ----
-    (function () {
-      const flashBoxes = [
-        document.getElementById('flashSuccessBox'),
-        document.getElementById('flashErrorBox'),
-      ];
-
-      flashBoxes.forEach(function (box) {
-        if (!box) return;
-
-        setTimeout(function () {
-          box.classList.remove('animate-flash-in');
-          box.classList.add('animate-flash-out');
-
-          setTimeout(function () {
-            if (box && box.parentNode) {
-              box.parentNode.removeChild(box);
-            }
-          }, 500);
-        }, 3000);
-      });
-    })();
-
-    // ---- Admin profile dropdown ----
-    (function () {
-      const btn       = document.getElementById('admin-dropdown-btn');
-      const menu      = document.getElementById('admin-dropdown-menu');
-      const chevron   = document.getElementById('admin-chevron');
-      const container = document.getElementById('admin-dropdown-container');
-
-      if (!btn || !menu || !container) return;
-
-      btn.addEventListener('click', function (e) {
-        e.stopPropagation();
-        const isOpen = !menu.classList.contains('hidden');
-        if (isOpen) {
-          menu.classList.add('hidden');
-          menu.classList.remove('animate-dropdown');
-          if (chevron) chevron.classList.remove('rotate-180');
-          btn.setAttribute('aria-expanded', 'false');
-        } else {
-          menu.classList.remove('hidden');
-          menu.classList.add('animate-dropdown');
-          if (chevron) chevron.classList.add('rotate-180');
-          btn.setAttribute('aria-expanded', 'true');
-        }
-      });
-
-      document.addEventListener('click', function (e) {
-        if (!container.contains(e.target)) {
-          menu.classList.add('hidden');
-          menu.classList.remove('animate-dropdown');
-          if (chevron) chevron.classList.remove('rotate-180');
-          btn.setAttribute('aria-expanded', 'false');
-        }
-      });
-
-      document.addEventListener('keydown', function (e) {
-        if (e.key === 'Escape') {
-          menu.classList.add('hidden');
-          menu.classList.remove('animate-dropdown');
-          if (chevron) chevron.classList.remove('rotate-180');
-          btn.setAttribute('aria-expanded', 'false');
-        }
-      });
-    })();
-
-    // ---- Logout confirmation ----
-    (function () {
-      const logoutButtons = [
-        document.getElementById('sidebarLogoutBtn'),
-        document.getElementById('dropdownLogoutBtn'),
-      ];
-      logoutButtons.forEach(function (btn) {
-        if (!btn) return;
-        btn.addEventListener('click', function (e) {
-          const confirmed = window.confirm('Are you sure you want to log out?');
-          if (!confirmed) {
-            e.preventDefault();
-            e.stopPropagation();
-            return false;
-          }
-          btn.classList.add('opacity-50', 'pointer-events-none');
-        });
-      });
-    })();
-
-    // ---- Department Add/Edit Modal ----
-    const departmentModal      = document.getElementById('departmentModal');
-    const departmentModalTitle = document.getElementById('departmentModalTitle');
-    const departmentForm       = document.getElementById('departmentForm');
-    const formAction           = document.getElementById('formAction');
-    const formDepartmentId     = document.getElementById('formDepartmentId');
-    const nameInput            = document.getElementById('department_name');
-    const descriptionInput     = document.getElementById('description');
-    const statusInput          = document.getElementById('status');
-    const statusFieldWrapper   = document.getElementById('statusFieldWrapper');
-
-    function openDepartmentModal(mode, id, name, description, status) {
-      departmentModal.classList.remove('hidden');
-
-      if (mode === 'edit') {
-        departmentModalTitle.textContent = 'Edit Department';
-        formAction.value         = 'edit_department';
-        formDepartmentId.value   = id || '';
-        nameInput.value          = name        || '';
-        descriptionInput.value   = description || '';
-        statusInput.value        = status      || 'Active';
-
-        if (statusFieldWrapper) {
-          statusFieldWrapper.style.display = '';
-        }
-        if (statusInput) {
-          statusInput.setAttribute('required', 'required');
-        }
-      } else {
-        departmentModalTitle.textContent = 'Add Department';
-        formAction.value         = 'create_department';
-        formDepartmentId.value   = '';
-        departmentForm.reset();
-
-        if (statusFieldWrapper) {
-          statusFieldWrapper.style.display = 'none';
-        }
-        if (statusInput) {
-          statusInput.removeAttribute('required');
-        }
-      }
-
-      setTimeout(() => nameInput && nameInput.focus(), 50);
-      if (typeof lucide !== 'undefined') lucide.createIcons();
-    }
-
-    function closeDepartmentModal() {
-      departmentModal.classList.add('hidden');
-      departmentForm.reset();
-      formAction.value         = 'create_department';
-      formDepartmentId.value   = '';
-    }
-
-    document.addEventListener('keydown', function (e) {
-      if (e.key === 'Escape' && departmentModal && !departmentModal.classList.contains('hidden')) {
-        closeDepartmentModal();
-      }
-    });
-
-    // ---- Delete Confirmation Modal ----
-    const deleteConfirmModal      = document.getElementById('deleteConfirmModal');
-    const deleteConfirmPanel      = document.getElementById('deleteConfirmPanel');
-    const deleteDepartmentNameEl  = document.getElementById('deleteDepartmentNameDisplay');
-    const confirmDeleteBtn        = document.getElementById('confirmDeleteBtn');
-
-    let pendingDeleteId = null;
-
-    function confirmDeleteDepartment(departmentId, departmentName) {
-      pendingDeleteId = departmentId;
-
-      if (deleteDepartmentNameEl) {
-        deleteDepartmentNameEl.textContent = '"' + departmentName + '"';
-      }
-
-      deleteConfirmModal.classList.remove('hidden');
-      document.body.classList.add('overflow-hidden');
-
-      if (deleteConfirmPanel) {
-        deleteConfirmPanel.classList.remove('animate-confirm-shake');
-        void deleteConfirmPanel.offsetWidth;
-        deleteConfirmPanel.classList.add('animate-confirm-shake');
-      }
-
-      setTimeout(function () {
-        if (confirmDeleteBtn) confirmDeleteBtn.focus();
-      }, 80);
-
-      if (typeof lucide !== 'undefined') lucide.createIcons();
-    }
-
-    function closeDeleteModal() {
-      deleteConfirmModal.classList.add('hidden');
-      document.body.classList.remove('overflow-hidden');
-      pendingDeleteId = null;
-    }
-
-    if (confirmDeleteBtn) {
-      confirmDeleteBtn.addEventListener('click', function () {
-        if (pendingDeleteId === null || pendingDeleteId === undefined) {
-          closeDeleteModal();
-          return;
-        }
-
-        const delIdInput = document.getElementById('deleteDepartmentId');
-        const delForm    = document.getElementById('deleteForm');
-
-        if (delIdInput && delForm) {
-          delIdInput.value = String(pendingDeleteId);
-          delForm.submit();
-        } else {
-          closeDeleteModal();
-        }
-      });
-    }
-
-    document.addEventListener('keydown', function (e) {
-      if (e.key === 'Escape' && deleteConfirmModal && !deleteConfirmModal.classList.contains('hidden')) {
-        closeDeleteModal();
-      }
-    });
-
-    // ---- Toggle Status Confirmation Modal ----
-    const toggleConfirmModal      = document.getElementById('toggleConfirmModal');
-    const toggleConfirmPanel      = document.getElementById('toggleConfirmPanel');
-    const toggleModalTitle        = document.getElementById('toggleModalTitle');
-    const toggleModalDescription  = document.getElementById('toggleModalDescription');
-    const toggleIcon              = document.getElementById('toggleIcon');
-    const confirmToggleBtn        = document.getElementById('confirmToggleBtn');
-    const confirmToggleBtnLabel   = document.getElementById('confirmToggleBtnLabel');
-
-    let pendingToggleId     = null;
-    let pendingToggleAction = '';
-
-    function confirmToggleStatus(departmentId, departmentName, currentStatus) {
-      pendingToggleId = departmentId;
-
-      const isCurrentlyActive = (String(currentStatus).toLowerCase() === 'active');
-      const newStatus         = isCurrentlyActive ? 'Inactive' : 'Active';
-      pendingToggleAction     = newStatus;
-
-      if (isCurrentlyActive) {
-        if (toggleModalTitle) toggleModalTitle.textContent = 'Deactivate Department?';
-        if (toggleModalDescription) {
-          toggleModalDescription.innerHTML = 'The department <span class="font-bold text-[#8B1E7E] break-words">"' + departmentName + '"</span> will be marked as <span class="font-bold text-[#8B1E7E]">Inactive</span>.';
-        }
-        if (confirmToggleBtnLabel) confirmToggleBtnLabel.textContent = 'Deactivate';
-        if (toggleIcon) toggleIcon.setAttribute('data-lucide', 'power-off');
-      } else {
-        if (toggleModalTitle) toggleModalTitle.textContent = 'Activate Department?';
-        if (toggleModalDescription) {
-          toggleModalDescription.innerHTML = 'The department <span class="font-bold text-[#8B1E7E] break-words">"' + departmentName + '"</span> will be marked as <span class="font-bold text-[#8B1E7E]">Active</span>.';
-        }
-        if (confirmToggleBtnLabel) confirmToggleBtnLabel.textContent = 'Activate';
-        if (toggleIcon) toggleIcon.setAttribute('data-lucide', 'power');
-      }
-
-      toggleConfirmModal.classList.remove('hidden');
-      document.body.classList.add('overflow-hidden');
-
-      if (toggleConfirmPanel) {
-        toggleConfirmPanel.classList.remove('animate-confirm-shake');
-        void toggleConfirmPanel.offsetWidth;
-        toggleConfirmPanel.classList.add('animate-confirm-shake');
-      }
-
-      setTimeout(function () {
-        if (confirmToggleBtn) confirmToggleBtn.focus();
-      }, 80);
+    document.addEventListener('DOMContentLoaded', function () {
 
       if (typeof lucide !== 'undefined') {
         lucide.createIcons();
       }
-    }
 
-    function closeToggleModal() {
-      toggleConfirmModal.classList.add('hidden');
-      document.body.classList.remove('overflow-hidden');
-      pendingToggleId     = null;
-      pendingToggleAction = '';
-    }
-
-    if (confirmToggleBtn) {
-      confirmToggleBtn.addEventListener('click', function () {
-        if (pendingToggleId === null || pendingToggleId === undefined) {
-          closeToggleModal();
-          return;
-        }
-
-        const toggleIdInput = document.getElementById('toggleDepartmentId');
-        const toggleForm    = document.getElementById('toggleForm');
-
-        if (toggleIdInput && toggleForm) {
-          toggleIdInput.value = String(pendingToggleId);
-          toggleForm.submit();
-        } else {
-          closeToggleModal();
-        }
-      });
-    }
-
-    document.addEventListener('keydown', function (e) {
-      if (e.key === 'Escape' && toggleConfirmModal && !toggleConfirmModal.classList.contains('hidden')) {
-        closeToggleModal();
-      }
-    });
-
-    // ---- Live Search ----
-    (function () {
-      const searchInput = document.getElementById('searchInput');
-      const tableBody   = document.getElementById('departmentsTableBody');
-
-      if (!searchInput || !tableBody) return;
-
-      searchInput.addEventListener('input', function () {
-        const term = this.value.toLowerCase().trim();
-        const rows = tableBody.querySelectorAll('tr');
-
-        rows.forEach(function (row) {
-          const text = row.textContent.toLowerCase();
-          row.style.display = (term === '' || text.indexOf(term) !== -1) ? '' : 'none';
+      // ---- Auto-dismiss flash ----
+      (function () {
+        ['flashSuccessBox', 'flashErrorBox'].forEach(function (id) {
+          const box = document.getElementById(id);
+          if (!box) return;
+          setTimeout(function () {
+            box.classList.remove('animate-flash-in');
+            box.classList.add('animate-flash-out');
+            setTimeout(function () { if (box.parentNode) box.parentNode.removeChild(box); }, 500);
+          }, 3000);
         });
+      })();
+
+      // ---- Admin profile dropdown ----
+      (function () {
+        const btn       = document.getElementById('admin-dropdown-btn');
+        const menu      = document.getElementById('admin-dropdown-menu');
+        const chevron   = document.getElementById('admin-chevron');
+        const container = document.getElementById('admin-dropdown-container');
+        if (!btn || !menu || !container) return;
+
+        btn.addEventListener('click', function (e) {
+          e.stopPropagation();
+          const isOpen = !menu.classList.contains('hidden');
+          if (isOpen) {
+            menu.classList.add('hidden'); menu.classList.remove('animate-dropdown');
+            if (chevron) chevron.classList.remove('rotate-180');
+            btn.setAttribute('aria-expanded', 'false');
+          } else {
+            menu.classList.remove('hidden'); menu.classList.add('animate-dropdown');
+            if (chevron) chevron.classList.add('rotate-180');
+            btn.setAttribute('aria-expanded', 'true');
+          }
+        });
+
+        document.addEventListener('click', function (e) {
+          if (!container.contains(e.target)) {
+            menu.classList.add('hidden'); menu.classList.remove('animate-dropdown');
+            if (chevron) chevron.classList.remove('rotate-180');
+            btn.setAttribute('aria-expanded', 'false');
+          }
+        });
+
+        document.addEventListener('keydown', function (e) {
+          if (e.key === 'Escape') {
+            menu.classList.add('hidden'); menu.classList.remove('animate-dropdown');
+            if (chevron) chevron.classList.remove('rotate-180');
+            btn.setAttribute('aria-expanded', 'false');
+          }
+        });
+      })();
+
+      // ---- Department Add/Edit Modal ----
+      const departmentModal      = document.getElementById('departmentModal');
+      const departmentModalTitle = document.getElementById('departmentModalTitle');
+      const departmentForm       = document.getElementById('departmentForm');
+      const formAction           = document.getElementById('formAction');
+      const formDepartmentId     = document.getElementById('formDepartmentId');
+      const nameInput            = document.getElementById('department_name');
+      const descriptionInput     = document.getElementById('description');
+      const statusInput          = document.getElementById('status');
+      const statusFieldWrapper   = document.getElementById('statusFieldWrapper');
+
+      window.openDepartmentModal = function (mode, id, name, description, status) {
+        departmentModal.classList.remove('hidden');
+
+        if (mode === 'edit') {
+          departmentModalTitle.textContent = 'Edit Department';
+          formAction.value         = 'edit_department';
+          formDepartmentId.value   = id || '';
+          nameInput.value          = name        || '';
+          descriptionInput.value   = description || '';
+          statusInput.value        = status      || 'Active';
+
+          if (statusFieldWrapper) statusFieldWrapper.style.display = '';
+          if (statusInput) statusInput.setAttribute('required', 'required');
+        } else {
+          departmentModalTitle.textContent = 'Add Department';
+          formAction.value         = 'create_department';
+          formDepartmentId.value   = '';
+          departmentForm.reset();
+
+          if (statusFieldWrapper) statusFieldWrapper.style.display = 'none';
+          if (statusInput) statusInput.removeAttribute('required');
+        }
+
+        setTimeout(() => nameInput && nameInput.focus(), 50);
+        if (typeof lucide !== 'undefined') lucide.createIcons();
+      };
+
+      window.closeDepartmentModal = function () {
+        departmentModal.classList.add('hidden');
+        departmentForm.reset();
+        formAction.value       = 'create_department';
+        formDepartmentId.value = '';
+      };
+
+      // ---- Delete Confirmation Modal ----
+      const deleteConfirmModal     = document.getElementById('deleteConfirmModal');
+      const deleteConfirmPanel     = document.getElementById('deleteConfirmPanel');
+      const deleteDepartmentNameEl = document.getElementById('deleteDepartmentNameDisplay');
+      const confirmDeleteBtn       = document.getElementById('confirmDeleteBtn');
+
+      let pendingDeleteId = null;
+
+      window.confirmDeleteDepartment = function (departmentId, departmentName) {
+        pendingDeleteId = departmentId;
+        if (deleteDepartmentNameEl) deleteDepartmentNameEl.textContent = '"' + departmentName + '"';
+
+        deleteConfirmModal.classList.remove('hidden');
+        document.body.classList.add('overflow-hidden');
+
+        if (deleteConfirmPanel) {
+          deleteConfirmPanel.classList.remove('animate-confirm-shake');
+          void deleteConfirmPanel.offsetWidth;
+          deleteConfirmPanel.classList.add('animate-confirm-shake');
+        }
+
+        setTimeout(function () { if (confirmDeleteBtn) confirmDeleteBtn.focus(); }, 80);
+        if (typeof lucide !== 'undefined') lucide.createIcons();
+      };
+
+      window.closeDeleteModal = function () {
+        deleteConfirmModal.classList.add('hidden');
+        document.body.classList.remove('overflow-hidden');
+        pendingDeleteId = null;
+      };
+
+      if (confirmDeleteBtn) {
+        confirmDeleteBtn.addEventListener('click', function () {
+          if (pendingDeleteId === null || pendingDeleteId === undefined) {
+            window.closeDeleteModal();
+            return;
+          }
+          const delIdInput = document.getElementById('deleteDepartmentId');
+          const delForm    = document.getElementById('deleteForm');
+          if (delIdInput && delForm) {
+            delIdInput.value = String(pendingDeleteId);
+            delForm.submit();
+          } else {
+            window.closeDeleteModal();
+          }
+        });
+      }
+
+      // ---- Toggle Status Confirmation Modal ----
+      const toggleConfirmModal     = document.getElementById('toggleConfirmModal');
+      const toggleConfirmPanel     = document.getElementById('toggleConfirmPanel');
+      const toggleModalTitle       = document.getElementById('toggleModalTitle');
+      const toggleModalDescription = document.getElementById('toggleModalDescription');
+      const toggleIcon             = document.getElementById('toggleIcon');
+      const confirmToggleBtn       = document.getElementById('confirmToggleBtn');
+      const confirmToggleBtnLabel  = document.getElementById('confirmToggleBtnLabel');
+
+      let pendingToggleId = null;
+
+      window.confirmToggleStatus = function (departmentId, departmentName, currentStatus) {
+        pendingToggleId = departmentId;
+
+        const isCurrentlyActive = (String(currentStatus).toLowerCase() === 'active');
+
+        if (isCurrentlyActive) {
+          if (toggleModalTitle) toggleModalTitle.textContent = 'Deactivate Department?';
+          if (toggleModalDescription) {
+            toggleModalDescription.innerHTML = 'The department <span class="font-bold text-[#8B1E7E] break-words">"' + departmentName + '"</span> will be marked as <span class="font-bold text-[#8B1E7E]">Inactive</span>.';
+          }
+          if (confirmToggleBtnLabel) confirmToggleBtnLabel.textContent = 'Deactivate';
+          if (toggleIcon) toggleIcon.setAttribute('data-lucide', 'power-off');
+        } else {
+          if (toggleModalTitle) toggleModalTitle.textContent = 'Activate Department?';
+          if (toggleModalDescription) {
+            toggleModalDescription.innerHTML = 'The department <span class="font-bold text-[#8B1E7E] break-words">"' + departmentName + '"</span> will be marked as <span class="font-bold text-[#8B1E7E]">Active</span>.';
+          }
+          if (confirmToggleBtnLabel) confirmToggleBtnLabel.textContent = 'Activate';
+          if (toggleIcon) toggleIcon.setAttribute('data-lucide', 'power');
+        }
+
+        toggleConfirmModal.classList.remove('hidden');
+        document.body.classList.add('overflow-hidden');
+
+        if (toggleConfirmPanel) {
+          toggleConfirmPanel.classList.remove('animate-confirm-shake');
+          void toggleConfirmPanel.offsetWidth;
+          toggleConfirmPanel.classList.add('animate-confirm-shake');
+        }
+
+        setTimeout(function () { if (confirmToggleBtn) confirmToggleBtn.focus(); }, 80);
+        if (typeof lucide !== 'undefined') lucide.createIcons();
+      };
+
+      window.closeToggleModal = function () {
+        toggleConfirmModal.classList.add('hidden');
+        document.body.classList.remove('overflow-hidden');
+        pendingToggleId = null;
+      };
+
+      if (confirmToggleBtn) {
+        confirmToggleBtn.addEventListener('click', function () {
+          if (pendingToggleId === null || pendingToggleId === undefined) {
+            window.closeToggleModal();
+            return;
+          }
+          const toggleIdInput = document.getElementById('toggleDepartmentId');
+          const toggleForm    = document.getElementById('toggleForm');
+          if (toggleIdInput && toggleForm) {
+            toggleIdInput.value = String(pendingToggleId);
+            toggleForm.submit();
+          } else {
+            window.closeToggleModal();
+          }
+        });
+      }
+
+      // ---- Logout Confirmation Modal ----
+      (function () {
+        const logoutConfirmModal = document.getElementById('logoutConfirmModal');
+        const logoutConfirmPanel = document.getElementById('logoutConfirmPanel');
+        const confirmLogoutBtn   = document.getElementById('confirmLogoutBtn');
+        const LOGOUT_URL         = '../logout.php?role=admin';
+
+        if (!logoutConfirmModal) return;
+
+        window.openLogoutModal = function () {
+          logoutConfirmModal.classList.remove('hidden');
+          document.body.classList.add('overflow-hidden');
+          if (logoutConfirmPanel) {
+            logoutConfirmPanel.classList.remove('animate-confirm-shake');
+            void logoutConfirmPanel.offsetWidth;
+            logoutConfirmPanel.classList.add('animate-confirm-shake');
+          }
+          setTimeout(function () { if (confirmLogoutBtn) confirmLogoutBtn.focus(); }, 80);
+          if (typeof lucide !== 'undefined') lucide.createIcons();
+        };
+        window.closeLogoutModal = function () {
+          logoutConfirmModal.classList.add('hidden');
+          document.body.classList.remove('overflow-hidden');
+        };
+
+        [document.getElementById('sidebarLogoutBtn'), document.getElementById('dropdownLogoutBtn')].forEach(function (btn) {
+          if (!btn) return;
+          btn.addEventListener('click', function (e) {
+            e.preventDefault();
+            e.stopPropagation();
+            window.openLogoutModal();
+          });
+        });
+
+        if (confirmLogoutBtn) {
+          confirmLogoutBtn.addEventListener('click', function () {
+            confirmLogoutBtn.classList.add('opacity-50', 'pointer-events-none');
+            window.location.href = LOGOUT_URL;
+          });
+        }
+      })();
+
+      // ---- Escape key: close any open modal ----
+      document.addEventListener('keydown', function (e) {
+        if (e.key !== 'Escape') return;
+        if (departmentModal && !departmentModal.classList.contains('hidden'))       window.closeDepartmentModal();
+        if (deleteConfirmModal && !deleteConfirmModal.classList.contains('hidden')) window.closeDeleteModal();
+        if (toggleConfirmModal && !toggleConfirmModal.classList.contains('hidden')) window.closeToggleModal();
+        if (logoutConfirmModal && !logoutConfirmModal.classList.contains('hidden')) window.closeLogoutModal();
       });
-    })();
+
+      // ---- Live Search ----
+      (function () {
+        const searchInput = document.getElementById('searchInput');
+        const tableBody   = document.getElementById('departmentsTableBody');
+        if (!searchInput || !tableBody) return;
+
+        searchInput.addEventListener('input', function () {
+          const term = this.value.toLowerCase().trim();
+          tableBody.querySelectorAll('tr').forEach(function (row) {
+            row.style.display = (term === '' || row.textContent.toLowerCase().indexOf(term) !== -1) ? '' : 'none';
+          });
+        });
+      })();
+    });
   </script>
 
   <script src="../assets/js/index.js"></script>

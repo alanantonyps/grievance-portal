@@ -7,6 +7,8 @@
  * Auth Check : case-insensitive role match against 'ADMIN'
  * Data Source: users LEFT JOIN admin_profiles
  * Fields     : Name, Address, Email, Contact Number
+ *
+ * Includes themed logout confirmation modal.
  * ---------------------------------------------------------------------------
  */
 
@@ -124,7 +126,6 @@ $displayName = !empty($profile['name'])
     ? $profile['name']
     : $profile['username'];
 
-// Safe display values (fallback to "Not provided" if empty)
 $displayAddress = !empty($profile['address'])       ? $profile['address']       : 'Not provided';
 $displayEmail   = !empty($profile['email'])         ? $profile['email']         : 'Not provided';
 $displayMobile  = !empty($profile['mobile_number']) ? $profile['mobile_number'] : 'Not provided';
@@ -173,13 +174,9 @@ function e(?string $v): string
   <title>User Details — Admin | Rajagiri College Grievance Portal</title>
   <link rel="icon" type="image/svg+xml" href="../public/favicon.svg" />
 
-  <!-- Tailwind CSS CDN -->
   <script src="https://cdn.tailwindcss.com"></script>
-
-  <!-- Lucide Icons CDN -->
   <script src="https://unpkg.com/lucide@latest"></script>
 
-  <!-- Tailwind Theme -->
   <script>
     tailwind.config = {
       theme: {
@@ -198,18 +195,30 @@ function e(?string $v): string
             softFloat: {
               '0%, 100%': { transform: 'translateY(0px)' },
               '50%':      { transform: 'translateY(-4px)' }
+            },
+            modalFadeIn: {
+              '0%':   { opacity: '0', transform: 'scale(0.96)' },
+              '100%': { opacity: '1', transform: 'scale(1)' }
+            },
+            confirmShake: {
+              '0%, 100%': { transform: 'translateX(0)' },
+              '20%':      { transform: 'translateX(-6px)' },
+              '40%':      { transform: 'translateX(6px)' },
+              '60%':      { transform: 'translateX(-4px)' },
+              '80%':      { transform: 'translateX(4px)' }
             }
           },
           animation: {
             'fade-in-up': 'fadeInUp 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards',
-            'soft-float': 'softFloat 4s ease-in-out infinite'
+            'soft-float': 'softFloat 4s ease-in-out infinite',
+            'modal-in':   'modalFadeIn 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards',
+            'confirm-shake': 'confirmShake 0.5s cubic-bezier(0.16, 1, 0.3, 1)'
           }
         }
       }
     };
   </script>
 
-  <!-- Local Styles -->
   <link rel="stylesheet" href="../assets/css/index.css" />
 </head>
 
@@ -217,20 +226,15 @@ function e(?string $v): string
 
   <div class="flex min-h-screen flex-1">
 
-    <!-- ============================================================
-         SIDEBAR
-         ============================================================ -->
+    <!-- SIDEBAR -->
     <aside class="w-20 bg-gradient-to-b from-[#4A154B] via-[#5A1B5C] to-[#006837] flex flex-col items-center py-4 shadow-2xl fixed inset-y-0 left-0 z-40">
 
-      <!-- Toggle Icon -->
       <button class="text-white/80 hover:text-white mb-8 p-2 rounded-lg hover:bg-white/10 transition-colors" aria-label="Toggle sidebar">
         <i data-lucide="menu" class="w-6 h-6"></i>
       </button>
 
-      <!-- Nav Icons -->
       <nav class="flex flex-col items-center space-y-6 flex-1">
 
-        <!-- Dashboard -->
         <a href="dashboard.php"
            class="group relative w-12 h-12 rounded-xl bg-white/10 hover:bg-white/20 flex items-center justify-center text-white transition-all hover:scale-110"
            title="Dashboard">
@@ -240,7 +244,6 @@ function e(?string $v): string
           </span>
         </a>
 
-        <!-- Profile (active) -->
         <a href="profile.php"
            class="group relative w-12 h-12 rounded-xl bg-white/20 backdrop-blur-sm flex items-center justify-center text-white shadow-lg ring-2 ring-white/30 transition-all hover:scale-110 hover:bg-white/30"
            title="Profile">
@@ -252,8 +255,8 @@ function e(?string $v): string
 
       </nav>
 
-      <!-- Logout -->
-      <a href="../logout.php?role=admin"
+      <!-- Logout Trigger -->
+      <a href="#" data-logout-trigger="1"
          id="sidebarLogoutBtn"
          class="group relative w-12 h-12 rounded-xl bg-white/10 hover:bg-red-500/40 flex items-center justify-center text-white transition-all hover:scale-110"
          title="Logout">
@@ -265,16 +268,12 @@ function e(?string $v): string
 
     </aside>
 
-    <!-- ============================================================
-         MAIN CONTENT WRAPPER
-         ============================================================ -->
+    <!-- MAIN CONTENT WRAPPER -->
     <div class="flex-1 ml-20 flex flex-col min-h-screen">
 
-      <!-- ============ TOP HEADER ============ -->
       <header class="bg-white border-b border-slate-200 shadow-sm sticky top-0 z-30">
         <div class="flex items-center justify-between px-6 py-4">
 
-          <!-- Left: Logos -->
           <div class="flex items-center space-x-4">
             <a href="dashboard.php" class="flex items-center group">
               <img
@@ -295,7 +294,6 @@ function e(?string $v): string
             />
           </div>
 
-          <!-- Right: Admin Profile Dropdown -->
           <div class="relative" id="admin-dropdown-container">
             <button id="admin-dropdown-btn"
                     type="button"
@@ -360,7 +358,7 @@ function e(?string $v): string
               </a>
 
               <div class="border-t border-slate-100 mt-2 pt-2">
-                <a href="../logout.php?role=admin"
+                <a href="#" data-logout-trigger="1"
                    id="dropdownLogoutBtn"
                    class="flex items-center px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 transition-all duration-200 group">
                   <i data-lucide="log-out" class="w-4 h-4 mr-3 group-hover:scale-110 transition-transform"></i>
@@ -373,10 +371,8 @@ function e(?string $v): string
         </div>
       </header>
 
-      <!-- ============ PAGE CONTENT ============ -->
       <main class="flex-1 px-6 py-8">
 
-        <!-- Breadcrumb -->
         <div class="max-w-5xl mx-auto mb-8 animate-fade-in-up">
           <h1 class="text-2xl md:text-3xl font-bold text-slate-800 mb-3 flex items-center tracking-tight">
             <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-[#4A154B] to-[#E5097F] flex items-center justify-center mr-3 shadow-lg shadow-purple-500/20">
@@ -394,7 +390,6 @@ function e(?string $v): string
           </nav>
         </div>
 
-        <!-- DB Error Notice -->
         <?php if ($dbError): ?>
           <div class="max-w-3xl mx-auto mb-6 rounded-xl border-2 border-amber-200 bg-amber-50 px-4 py-3 flex items-start space-x-2">
             <i data-lucide="alert-triangle" class="w-5 h-5 text-amber-500 flex-shrink-0 mt-0.5"></i>
@@ -402,16 +397,13 @@ function e(?string $v): string
           </div>
         <?php endif; ?>
 
-        <!-- ============ PROFILE CARD ============ -->
         <div class="max-w-3xl mx-auto">
 
           <div class="relative group/card animate-fade-in-up" style="animation-delay: 100ms;">
-            <!-- Card Glow -->
             <div class="absolute -inset-0.5 bg-gradient-to-r from-[#4A154B] via-[#8B1E7E] to-[#E5097F] rounded-3xl blur opacity-10 group-hover/card:opacity-30 transition duration-500"></div>
 
             <div class="relative bg-white rounded-3xl shadow-xl border border-slate-200/60 overflow-hidden transition-shadow duration-300 group-hover/card:shadow-2xl">
 
-              <!-- ============ CARD HEADER ============ -->
               <div class="bg-gradient-to-r from-slate-50 to-slate-100 px-6 py-4 border-b border-slate-200">
                 <h2 class="text-lg md:text-xl font-bold text-slate-800 flex items-center">
                   <i data-lucide="id-card" class="w-5 h-5 mr-2 text-[#8B1E7E]"></i>
@@ -419,24 +411,18 @@ function e(?string $v): string
                 </h2>
               </div>
 
-              <!-- ============ AVATAR BANNER ============ -->
               <div class="relative px-6 py-12 overflow-hidden">
-                <!-- Layered gradient background -->
                 <div class="absolute inset-0 bg-gradient-to-br from-pink-100 via-purple-50 to-pink-50"></div>
 
-                <!-- Decorative shapes -->
                 <div class="absolute -top-10 -right-10 w-40 h-40 bg-gradient-to-br from-[#E5097F]/10 to-transparent rounded-full blur-2xl"></div>
                 <div class="absolute -bottom-10 -left-10 w-40 h-40 bg-gradient-to-br from-[#4A154B]/10 to-transparent rounded-full blur-2xl"></div>
                 <div class="absolute top-4 right-8 w-16 h-16 bg-[#C5A059]/10 rounded-full blur-xl"></div>
 
                 <div class="relative flex flex-col items-center justify-center">
 
-                  <!-- Avatar -->
                   <div class="relative animate-soft-float">
-                    <!-- Glow ring -->
                     <div class="absolute -inset-2 bg-gradient-to-r from-[#4A154B] via-[#8B1E7E] to-[#E5097F] rounded-full blur-md opacity-40"></div>
 
-                    <!-- Outer ring -->
                     <div class="relative w-32 h-32 md:w-36 md:h-36 rounded-full bg-white p-1.5 shadow-2xl">
                       <div class="w-full h-full rounded-full overflow-hidden ring-4 ring-white">
                         <?php if ($hasProfilePicture): ?>
@@ -454,12 +440,10 @@ function e(?string $v): string
                     </div>
                   </div>
 
-                  <!-- Name -->
                   <h3 class="mt-5 text-2xl md:text-3xl font-bold text-slate-800 tracking-tight">
                     <?= e($displayName) ?>
                   </h3>
 
-                  <!-- Role chip -->
                   <div class="mt-2 inline-flex items-center space-x-1.5 bg-white/80 backdrop-blur-sm border border-purple-200 px-3 py-1 rounded-full shadow-sm">
                     <i data-lucide="shield-check" class="w-3.5 h-3.5 text-[#8B1E7E]"></i>
                     <span class="text-xs font-bold text-[#4A154B] uppercase tracking-wider">Administrator</span>
@@ -467,7 +451,6 @@ function e(?string $v): string
                 </div>
               </div>
 
-              <!-- ============ INFO TABLE (4 Rows) ============ -->
               <div class="px-6 md:px-10 py-8 bg-slate-50/30 border-t border-slate-100">
                 <div class="flex items-center mb-5">
                   <i data-lucide="clipboard-list" class="w-4 h-4 text-[#8B1E7E] mr-2"></i>
@@ -478,7 +461,6 @@ function e(?string $v): string
                   <table class="w-full">
                     <tbody class="divide-y divide-slate-100">
 
-                      <!-- Row 1: Name -->
                       <tr class="group/row hover:bg-gradient-to-r hover:from-pink-50/40 hover:to-purple-50/40 transition-all duration-200">
                         <td class="w-1/3 px-5 py-5 align-top">
                           <div class="flex items-center text-xs font-bold text-slate-500 uppercase tracking-wider group-hover/row:text-[#8B1E7E] transition-colors">
@@ -495,7 +477,6 @@ function e(?string $v): string
                         </td>
                       </tr>
 
-                      <!-- Row 2: Address -->
                       <tr class="group/row hover:bg-gradient-to-r hover:from-pink-50/40 hover:to-purple-50/40 transition-all duration-200">
                         <td class="w-1/3 px-5 py-5 align-top">
                           <div class="flex items-center text-xs font-bold text-slate-500 uppercase tracking-wider group-hover/row:text-[#8B1E7E] transition-colors">
@@ -512,7 +493,6 @@ function e(?string $v): string
                         </td>
                       </tr>
 
-                      <!-- Row 3: Email -->
                       <tr class="group/row hover:bg-gradient-to-r hover:from-pink-50/40 hover:to-purple-50/40 transition-all duration-200">
                         <td class="w-1/3 px-5 py-5 align-top">
                           <div class="flex items-center text-xs font-bold text-slate-500 uppercase tracking-wider group-hover/row:text-[#8B1E7E] transition-colors">
@@ -529,7 +509,6 @@ function e(?string $v): string
                         </td>
                       </tr>
 
-                      <!-- Row 4: Contact Number -->
                       <tr class="group/row hover:bg-gradient-to-r hover:from-pink-50/40 hover:to-purple-50/40 transition-all duration-200">
                         <td class="w-1/3 px-5 py-5 align-top">
                           <div class="flex items-center text-xs font-bold text-slate-500 uppercase tracking-wider group-hover/row:text-[#8B1E7E] transition-colors">
@@ -551,10 +530,8 @@ function e(?string $v): string
                 </div>
               </div>
 
-              <!-- ============ ACTION FOOTER ============ -->
               <div class="px-6 md:px-10 py-6 bg-white border-t border-slate-200 flex flex-col sm:flex-row justify-between items-center gap-3">
 
-                <!-- Back to Dashboard Button — Soft Neutral Outline -->
                 <a href="dashboard.php"
                    class="group/btn relative w-full sm:w-auto overflow-hidden rounded-xl border-2 border-slate-200 bg-white hover:border-[#8B1E7E]/40 hover:bg-slate-50 transition-all duration-300 hover:scale-[1.02] active:scale-95">
                   <div class="relative flex items-center justify-center space-x-2 py-2.5 px-6 text-slate-700 font-bold group-hover/btn:text-[#8B1E7E] transition-colors">
@@ -563,20 +540,15 @@ function e(?string $v): string
                   </div>
                 </a>
 
-                <!-- Edit Button — Darker Purple Gradient -->
                 <a href="edit_profile.php"
                    class="group/btn relative w-full sm:w-auto overflow-hidden rounded-xl shadow-lg shadow-purple-500/30 hover:shadow-2xl hover:shadow-pink-500/40 transition-all duration-300 hover:scale-[1.03] active:scale-95">
 
-                  <!-- Darker on-theme gradient -->
                   <div class="absolute inset-0 bg-gradient-to-r from-[#4A154B] via-[#7A2E82] to-[#C41574]"></div>
 
-                  <!-- Reversed gradient on hover -->
                   <div class="absolute inset-0 bg-gradient-to-r from-[#C41574] via-[#7A2E82] to-[#4A154B] opacity-0 group-hover/btn:opacity-100 transition-opacity duration-500"></div>
 
-                  <!-- Shine sweep effect -->
                   <div class="absolute inset-0 -translate-x-full group-hover/btn:translate-x-full transition-transform duration-1000 bg-gradient-to-r from-transparent via-white/25 to-transparent"></div>
 
-                  <!-- Subtle glow overlay -->
                   <div class="absolute inset-0 bg-[radial-gradient(circle_at_50%_50%,rgba(255,255,255,0.2),transparent_70%)] opacity-0 group-hover/btn:opacity-100 transition-opacity duration-500"></div>
 
                   <div class="relative flex items-center justify-center space-x-2 py-2.5 px-8 text-white font-bold">
@@ -594,7 +566,6 @@ function e(?string $v): string
 
       </main>
 
-      <!-- ============ FOOTER ============ -->
       <footer class="bg-gradient-to-r from-purple-200 via-pink-100 to-purple-200 border-t border-purple-200/60 mt-auto">
         <div class="px-6 py-6">
           <div class="max-w-7xl mx-auto">
@@ -684,74 +655,141 @@ function e(?string $v): string
     </div>
   </div>
 
-  <!-- ====================== SCRIPTS ====================== -->
+  <!-- ============================================================= -->
+  <!-- LOGOUT CONFIRMATION MODAL                                     -->
+  <!-- ============================================================= -->
+  <div id="logoutConfirmModal" class="hidden fixed inset-0 z-[70] flex items-center justify-center p-4">
+    <div class="absolute inset-0 bg-black/50 backdrop-blur-sm" onclick="closeLogoutModal()"></div>
+
+    <div id="logoutConfirmPanel" class="relative w-full max-w-md bg-white rounded-2xl shadow-2xl animate-modal-in overflow-hidden">
+      <div class="h-1.5 w-full bg-gradient-to-r from-[#6A2C8A] via-[#8B1E7E] to-[#C43A7A]"></div>
+
+      <div class="px-6 pt-6 pb-2 flex flex-col items-center text-center">
+        <div class="w-16 h-16 rounded-full flex items-center justify-center mb-4 bg-gradient-to-br from-red-100 to-pink-100 ring-4 ring-red-50">
+          <i data-lucide="log-out" class="w-8 h-8 text-red-500"></i>
+        </div>
+
+        <h3 class="text-xl font-bold text-slate-800 mb-2">Log Out?</h3>
+
+        <p class="text-sm text-slate-500 leading-relaxed">
+          You are about to log out of <span class="font-bold text-[#8B1E7E] break-words"><?= e($displayName) ?></span>.
+          Any unsaved changes will be lost.
+        </p>
+
+        <p class="text-xs text-slate-400 font-medium mt-3 flex items-center gap-1.5">
+          <i data-lucide="info" class="w-3.5 h-3.5"></i> You can log back in anytime.
+        </p>
+      </div>
+
+      <div class="px-6 py-5 mt-2 flex flex-col-reverse sm:flex-row gap-3">
+        <button type="button" onclick="closeLogoutModal()"
+                class="flex-1 px-5 py-3 rounded-xl font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-200 transition-all duration-200 active:scale-95">
+          Cancel
+        </button>
+        <button type="button" id="confirmLogoutBtn"
+                class="flex-1 px-5 py-3 rounded-xl font-bold text-white bg-gradient-to-r from-red-500 via-red-600 to-rose-600 hover:from-red-600 hover:via-red-700 hover:to-rose-700 shadow-lg shadow-red-500/30 hover:shadow-red-500/50 transition-all duration-300 hover:-translate-y-0.5 active:scale-95 flex items-center justify-center gap-2">
+          <i data-lucide="log-out" class="w-4 h-4"></i>
+          <span>Log Out</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
   <script>
-    // Initialize Lucide icons
-    if (typeof lucide !== 'undefined') {
-      lucide.createIcons();
-    }
+    document.addEventListener('DOMContentLoaded', function () {
 
-    // ---- Admin Profile Dropdown ----
-    (function () {
-      const btn       = document.getElementById('admin-dropdown-btn');
-      const menu      = document.getElementById('admin-dropdown-menu');
-      const chevron   = document.getElementById('admin-chevron');
-      const container = document.getElementById('admin-dropdown-container');
+      if (typeof lucide !== 'undefined') {
+        lucide.createIcons();
+      }
 
-      if (!btn || !menu || !container) return;
-
-      btn.addEventListener('click', function (e) {
-        e.stopPropagation();
-        const isOpen = !menu.classList.contains('hidden');
-        if (isOpen) {
-          menu.classList.add('hidden');
-          if (chevron) chevron.classList.remove('rotate-180');
-          btn.setAttribute('aria-expanded', 'false');
-        } else {
-          menu.classList.remove('hidden');
-          if (chevron) chevron.classList.add('rotate-180');
-          btn.setAttribute('aria-expanded', 'true');
-        }
-      });
-
-      document.addEventListener('click', function (e) {
-        if (!container.contains(e.target)) {
-          menu.classList.add('hidden');
-          if (chevron) chevron.classList.remove('rotate-180');
-          btn.setAttribute('aria-expanded', 'false');
-        }
-      });
-
-      document.addEventListener('keydown', function (e) {
-        if (e.key === 'Escape') {
-          menu.classList.add('hidden');
-          if (chevron) chevron.classList.remove('rotate-180');
-          btn.setAttribute('aria-expanded', 'false');
-        }
-      });
-    })();
-
-    // ---- Logout Confirmation ----
-    (function () {
-      const logoutButtons = [
-        document.getElementById('sidebarLogoutBtn'),
-        document.getElementById('dropdownLogoutBtn'),
-      ];
-
-      logoutButtons.forEach(function (btn) {
-        if (!btn) return;
+      // ---- Admin Profile Dropdown ----
+      (function () {
+        const btn       = document.getElementById('admin-dropdown-btn');
+        const menu      = document.getElementById('admin-dropdown-menu');
+        const chevron   = document.getElementById('admin-chevron');
+        const container = document.getElementById('admin-dropdown-container');
+        if (!btn || !menu || !container) return;
 
         btn.addEventListener('click', function (e) {
-          const confirmed = window.confirm('Are you sure you want to log out?');
-          if (!confirmed) {
+          e.stopPropagation();
+          const isOpen = !menu.classList.contains('hidden');
+          if (isOpen) {
+            menu.classList.add('hidden');
+            if (chevron) chevron.classList.remove('rotate-180');
+            btn.setAttribute('aria-expanded', 'false');
+          } else {
+            menu.classList.remove('hidden');
+            if (chevron) chevron.classList.add('rotate-180');
+            btn.setAttribute('aria-expanded', 'true');
+          }
+        });
+
+        document.addEventListener('click', function (e) {
+          if (!container.contains(e.target)) {
+            menu.classList.add('hidden');
+            if (chevron) chevron.classList.remove('rotate-180');
+            btn.setAttribute('aria-expanded', 'false');
+          }
+        });
+
+        document.addEventListener('keydown', function (e) {
+          if (e.key === 'Escape') {
+            menu.classList.add('hidden');
+            if (chevron) chevron.classList.remove('rotate-180');
+            btn.setAttribute('aria-expanded', 'false');
+          }
+        });
+      })();
+
+      // ---- Logout Confirmation Modal ----
+      (function () {
+        const logoutConfirmModal = document.getElementById('logoutConfirmModal');
+        const logoutConfirmPanel = document.getElementById('logoutConfirmPanel');
+        const confirmLogoutBtn   = document.getElementById('confirmLogoutBtn');
+        const LOGOUT_URL         = '../logout.php?role=admin';
+
+        if (!logoutConfirmModal) return;
+
+        window.openLogoutModal = function () {
+          logoutConfirmModal.classList.remove('hidden');
+          document.body.classList.add('overflow-hidden');
+          if (logoutConfirmPanel) {
+            logoutConfirmPanel.classList.remove('animate-confirm-shake');
+            void logoutConfirmPanel.offsetWidth;
+            logoutConfirmPanel.classList.add('animate-confirm-shake');
+          }
+          setTimeout(function () { if (confirmLogoutBtn) confirmLogoutBtn.focus(); }, 80);
+          if (typeof lucide !== 'undefined') lucide.createIcons();
+        };
+        window.closeLogoutModal = function () {
+          logoutConfirmModal.classList.add('hidden');
+          document.body.classList.remove('overflow-hidden');
+        };
+
+        [document.getElementById('sidebarLogoutBtn'), document.getElementById('dropdownLogoutBtn')].forEach(function (btn) {
+          if (!btn) return;
+          btn.addEventListener('click', function (e) {
             e.preventDefault();
             e.stopPropagation();
-            return false;
-          }
-          btn.classList.add('opacity-50', 'pointer-events-none');
+            window.openLogoutModal();
+          });
         });
-      });
-    })();
+
+        if (confirmLogoutBtn) {
+          confirmLogoutBtn.addEventListener('click', function () {
+            confirmLogoutBtn.classList.add('opacity-50', 'pointer-events-none');
+            window.location.href = LOGOUT_URL;
+          });
+        }
+
+        document.addEventListener('keydown', function (e) {
+          if (e.key === 'Escape' && !logoutConfirmModal.classList.contains('hidden')) {
+            window.closeLogoutModal();
+          }
+        });
+      })();
+
+    });
   </script>
 
   <script src="../assets/js/index.js"></script>

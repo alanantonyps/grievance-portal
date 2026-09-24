@@ -23,6 +23,8 @@
  *   • Edit (cell members only)
  *   • Deactivate
  *   • Delete
+ *
+ * Includes themed logout confirmation modal.
  * ---------------------------------------------------------------------------
  */
 
@@ -256,7 +258,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $conn instanceof mysqli) {
             try {
                 $conn->begin_transaction();
 
-                // Duplicate email check
                 $chk2 = $conn->prepare("SELECT id FROM cell_members WHERE email = ? LIMIT 1");
                 $chk2->bind_param('s', $email);
                 $chk2->execute();
@@ -266,7 +267,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $conn instanceof mysqli) {
                 }
                 $chk2->close();
 
-                // Unique username from email local-part
                 $baseUsername = strtolower(preg_replace('/[^a-z0-9]/i', '', strstr($email, '@', true) ?: 'member'));
                 if ($baseUsername === '') {
                     $baseUsername = 'member';
@@ -290,14 +290,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $conn instanceof mysqli) {
                 $hash          = password_hash($plainPassword, PASSWORD_BCRYPT);
                 $userRole      = $roleMap[$memberType] ?? 'MANAGEMENT';
 
-                // Create user
                 $stmtU = $conn->prepare("INSERT INTO users (username, password, role, status) VALUES (?, ?, ?, 'Approved')");
                 $stmtU->bind_param('sss', $username, $hash, $userRole);
                 $stmtU->execute();
                 $newUserId = (int) $conn->insert_id;
                 $stmtU->close();
 
-                // Insert cell_members row
                 $stmtS = $conn->prepare(
                     "INSERT INTO cell_members
                         (user_id, designation_id, department_id, member_type, grievance_type_id, name, email, mobile_number)
@@ -361,7 +359,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $conn instanceof mysqli) {
             try {
                 $conn->begin_transaction();
 
-                // Ensure the user is actually a cell member before updating
                 $chkExist = $conn->prepare("SELECT id FROM cell_members WHERE user_id = ? LIMIT 1");
                 $chkExist->bind_param('i', $targetUserId);
                 $chkExist->execute();
@@ -375,7 +372,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $conn instanceof mysqli) {
                     throw new Exception('This user is not a cell member. Use the + button to add a new member.');
                 }
 
-                // Duplicate email check
                 $chkEmail = $conn->prepare("SELECT id FROM cell_members WHERE email = ? AND user_id != ? LIMIT 1");
                 $chkEmail->bind_param('si', $email, $targetUserId);
                 $chkEmail->execute();
@@ -385,7 +381,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $conn instanceof mysqli) {
                 }
                 $chkEmail->close();
 
-                // Update cell_members row
                 $stmt = $conn->prepare(
                     "UPDATE cell_members
                      SET designation_id = ?, member_type = ?, grievance_type_id = ?,
@@ -405,7 +400,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $conn instanceof mysqli) {
                 $stmt->execute();
                 $stmt->close();
 
-                // Sync users.role
                 $userRole = $roleMap[$memberType] ?? 'MANAGEMENT';
                 $stmtU = $conn->prepare("UPDATE users SET role = ? WHERE id = ?");
                 $stmtU->bind_param('si', $userRole, $targetUserId);
@@ -440,7 +434,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $conn instanceof mysqli) {
 
         if ($flashError === '') {
             try {
-                // Verify user exists
                 $chkUser = $conn->prepare("SELECT id FROM users WHERE id = ? LIMIT 1");
                 $chkUser->bind_param('i', $targetUserId);
                 $chkUser->execute();
@@ -475,7 +468,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $conn instanceof mysqli) {
                 try {
                     $conn->begin_transaction();
 
-                    // Refuse to delete ADMIN accounts
                     $chkRole = $conn->prepare("SELECT role FROM users WHERE id = ? LIMIT 1");
                     $chkRole->bind_param('i', $targetUserId);
                     $chkRole->execute();
@@ -619,7 +611,6 @@ if ($conn instanceof mysqli) {
         $params = [];
         $types  = '';
 
-        // ---- Member Type filter ----
         if ($filterMemberType !== 'ALL') {
             if ($filterMemberType === 'GRIEVANCE_MEMBER') {
                 $sql .= " AND cm.member_type = 'GRIEVANCE_MEMBER'";
@@ -636,7 +627,6 @@ if ($conn instanceof mysqli) {
             }
         }
 
-        // ---- Status filter ----
         if ($filterStatus !== 'All') {
             $sql .= " AND u.status = ?";
             $params[] = $filterStatus;
@@ -731,7 +721,12 @@ if ($conn instanceof mysqli) {
           <span class="absolute left-full ml-3 hidden group-hover:block whitespace-nowrap bg-[#4A154B] text-white text-xs px-3 py-1.5 rounded-lg shadow-lg z-50">Back to Members</span>
         </a>
       </nav>
-      <a href="../logout.php?role=admin" id="sidebarLogoutBtn" class="group relative w-12 h-12 rounded-xl bg-white/10 hover:bg-red-500/40 flex items-center justify-center text-white transition-all hover:scale-110" title="Logout">
+
+      <!-- Logout Trigger -->
+      <a href="#" data-logout-trigger="1"
+         id="sidebarLogoutBtn"
+         class="group relative w-12 h-12 rounded-xl bg-white/10 hover:bg-red-500/40 flex items-center justify-center text-white transition-all hover:scale-110"
+         title="Logout">
         <i data-lucide="log-out" class="w-6 h-6 group-hover:translate-x-0.5 transition-transform"></i>
         <span class="absolute left-full ml-3 hidden group-hover:block whitespace-nowrap bg-red-600 text-white text-xs px-3 py-1.5 rounded-lg shadow-lg z-50">Logout</span>
       </a>
@@ -740,7 +735,6 @@ if ($conn instanceof mysqli) {
     <!-- MAIN CONTENT -->
     <div class="flex-1 ml-20 flex flex-col min-h-screen">
 
-      <!-- HEADER -->
       <header class="bg-white border-b border-slate-200 shadow-sm sticky top-0 z-30">
         <div class="flex items-center justify-between px-6 py-4">
           <div class="flex items-center space-x-4">
@@ -790,7 +784,9 @@ if ($conn instanceof mysqli) {
                 <i data-lucide="key" class="w-4 h-4 mr-3 text-[#8B1E7E]"></i><span class="font-medium">Change Password</span>
               </a>
               <div class="border-t border-slate-100 mt-2 pt-2">
-                <a href="../logout.php?role=admin" id="dropdownLogoutBtn" class="flex items-center px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 transition-all duration-200 group/item">
+                <a href="#" data-logout-trigger="1"
+                   id="dropdownLogoutBtn"
+                   class="flex items-center px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 transition-all duration-200 group/item">
                   <i data-lucide="log-out" class="w-4 h-4 mr-3"></i><span class="font-medium">Logout</span>
                 </a>
               </div>
@@ -799,10 +795,8 @@ if ($conn instanceof mysqli) {
         </div>
       </header>
 
-      <!-- PAGE CONTENT -->
       <main class="flex-1 px-6 py-8">
 
-        <!-- Breadcrumb -->
         <div class="max-w-6xl mx-auto mb-6 animate-fade-in-up">
           <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
             <div>
@@ -825,7 +819,6 @@ if ($conn instanceof mysqli) {
           </div>
         </div>
 
-        <!-- Flash Messages -->
         <?php if ($flashSuccess !== ''): ?>
           <div id="flashSuccessBox" class="max-w-6xl mx-auto mb-6 rounded-xl border-2 border-emerald-200 bg-emerald-50 px-4 py-3 flex items-start space-x-2 animate-flash-in overflow-hidden">
             <i data-lucide="check-circle" class="w-5 h-5 text-[#006837] flex-shrink-0 mt-0.5"></i>
@@ -840,7 +833,6 @@ if ($conn instanceof mysqli) {
           </div>
         <?php endif; ?>
 
-        <!-- FILTER BAR -->
         <div class="max-w-6xl mx-auto mb-5 animate-fade-in-up" style="animation-delay: 40ms;">
           <div class="bg-slate-100 border border-slate-200 rounded-xl px-5 py-4 shadow-sm">
             <form method="GET" action="cell_members.php" class="grid grid-cols-1 md:grid-cols-12 gap-4 items-end">
@@ -877,7 +869,6 @@ if ($conn instanceof mysqli) {
           </div>
         </div>
 
-        <!-- TABLE CONTROLS -->
         <div class="max-w-6xl mx-auto mb-5 animate-fade-in-up" style="animation-delay: 80ms;">
           <div class="bg-white rounded-xl shadow-sm border border-slate-200/70 px-5 py-4">
             <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -900,7 +891,6 @@ if ($conn instanceof mysqli) {
           </div>
         </div>
 
-        <!-- DATA TABLE -->
         <div class="max-w-6xl mx-auto animate-fade-in-up" style="animation-delay: 120ms;">
           <div class="bg-white rounded-2xl shadow-lg border border-slate-200/70 overflow-hidden">
             <div class="overflow-x-auto">
@@ -962,9 +952,7 @@ if ($conn instanceof mysqli) {
                       <tr class="hover:bg-slate-50/80 transition-colors group">
                         <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-slate-900"><?= $index + 1 ?></td>
                         <td class="px-6 py-4 text-sm font-semibold text-slate-800"><?= e($rowDisplayName) ?></td>
-                        <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-slate-700">
-                          <?= e($rowMemberTypeLbl) ?>
-                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-slate-700"><?= e($rowMemberTypeLbl) ?></td>
                         <td class="px-6 py-4 text-sm text-slate-600 break-all"><?= e($rowDisplayEmail !== '' ? $rowDisplayEmail : '—') ?></td>
                         <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-600"><?= e($rowDisplayMobile !== '' ? $rowDisplayMobile : '—') ?></td>
                         <td class="px-6 py-4 whitespace-nowrap">
@@ -972,14 +960,12 @@ if ($conn instanceof mysqli) {
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap">
                           <div class="grid grid-cols-2 gap-1.5 w-fit mx-auto">
-                            <!-- Set Password -->
                             <button type="button" title="Set password"
                                     onclick='openSetPasswordModal(<?= $rowUserId ?>, <?= json_encode($rowDisplayName) ?>)'
                                     class="w-8 h-8 rounded-full bg-purple-50 hover:bg-[#4A154B] flex items-center justify-center text-[#4A154B] hover:text-white transition-all duration-200 hover:scale-110">
                               <i data-lucide="key-round" class="w-3.5 h-3.5"></i>
                             </button>
 
-                            <!-- Edit -->
                             <?php if ($rowIsCellMember): ?>
                               <button type="button" title="Edit member"
                                       onclick='openMemberModal("edit", <?= $rowUserId ?>, <?= json_encode($rowDisplayName) ?>, <?= $rowIsManagement ? '1' : '0' ?>, <?= json_encode($rowDesignationId) ?>, <?= json_encode($rowGrievanceType) ?>, <?= json_encode($rowDisplayEmail) ?>, <?= json_encode($rowDisplayMobile) ?>)'
@@ -993,13 +979,11 @@ if ($conn instanceof mysqli) {
                               </button>
                             <?php endif; ?>
 
-                            <!-- Deactivate -->
                             <button type="button" title="Deactivate user" onclick='confirmDeactivate(<?= $rowUserId ?>, <?= json_encode($rowDisplayName) ?>)'
                                     class="w-8 h-8 rounded-full bg-purple-50 hover:bg-[#4A154B] flex items-center justify-center text-[#4A154B] hover:text-white transition-all duration-200 hover:scale-110">
                               <i data-lucide="x" class="w-3.5 h-3.5"></i>
                             </button>
 
-                            <!-- Delete -->
                             <button type="button" title="Delete user" onclick='confirmDeleteMember(<?= $rowUserId ?>, <?= json_encode($rowDisplayName) ?>)'
                                     class="w-8 h-8 rounded-full bg-purple-50 hover:bg-red-500 flex items-center justify-center text-[#4A154B] hover:text-white transition-all duration-200 hover:scale-110">
                               <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
@@ -1034,7 +1018,6 @@ if ($conn instanceof mysqli) {
 
       </main>
 
-      <!-- FOOTER -->
       <footer class="bg-gradient-to-r from-purple-200 via-pink-100 to-purple-200 border-t border-purple-200/60 mt-auto">
         <div class="px-6 py-6">
           <div class="max-w-7xl mx-auto text-center">
@@ -1053,9 +1036,7 @@ if ($conn instanceof mysqli) {
     </div>
   </div>
 
-  <!-- ============================================================ -->
-  <!-- ADD / EDIT MEMBER MODAL                                       -->
-  <!-- ============================================================ -->
+  <!-- ADD / EDIT MEMBER MODAL -->
   <div id="memberModal" class="hidden fixed inset-0 z-[60] flex items-center justify-center p-4">
     <div class="absolute inset-0 bg-black/40 backdrop-blur-sm" onclick="closeMemberModal()"></div>
 
@@ -1138,9 +1119,7 @@ if ($conn instanceof mysqli) {
     </div>
   </div>
 
-  <!-- ============================================================ -->
-  <!-- SET PASSWORD MODAL                                            -->
-  <!-- ============================================================ -->
+  <!-- SET PASSWORD MODAL -->
   <div id="setPasswordModal" class="hidden fixed inset-0 z-[70] flex items-center justify-center p-4">
     <div class="absolute inset-0 bg-black/40 backdrop-blur-sm" onclick="closeSetPasswordModal()"></div>
 
@@ -1165,7 +1144,6 @@ if ($conn instanceof mysqli) {
           <span id="setPasswordNameDisplay" class="font-bold text-[#8B1E7E] break-words">this user</span>.
         </p>
 
-        <!-- Password -->
         <div class="space-y-2">
           <label for="new_password" class="block text-sm font-semibold text-slate-700">Password<span class="text-red-500">*</span></label>
           <div class="relative">
@@ -1179,7 +1157,6 @@ if ($conn instanceof mysqli) {
           <p class="text-xs text-slate-500">Minimum 6 characters.</p>
         </div>
 
-        <!-- Confirm Password -->
         <div class="space-y-2">
           <label for="confirm_password" class="block text-sm font-semibold text-slate-700">Confirm Password<span class="text-red-500">*</span></label>
           <div class="relative">
@@ -1252,6 +1229,46 @@ if ($conn instanceof mysqli) {
     </div>
   </div>
 
+  <!-- ============================================================= -->
+  <!-- LOGOUT CONFIRMATION MODAL                                     -->
+  <!-- ============================================================= -->
+  <div id="logoutConfirmModal" class="hidden fixed inset-0 z-[70] flex items-center justify-center p-4">
+    <div class="absolute inset-0 bg-black/50 backdrop-blur-sm" onclick="closeLogoutModal()"></div>
+
+    <div id="logoutConfirmPanel" class="relative w-full max-w-md bg-white rounded-2xl shadow-2xl animate-modal-in overflow-hidden">
+      <div class="h-1.5 w-full bg-gradient-to-r from-[#6A2C8A] via-[#8B1E7E] to-[#C43A7A]"></div>
+
+      <div class="px-6 pt-6 pb-2 flex flex-col items-center text-center">
+        <div class="w-16 h-16 rounded-full flex items-center justify-center mb-4 bg-gradient-to-br from-red-100 to-pink-100 ring-4 ring-red-50">
+          <i data-lucide="log-out" class="w-8 h-8 text-red-500"></i>
+        </div>
+
+        <h3 class="text-xl font-bold text-slate-800 mb-2">Log Out?</h3>
+
+        <p class="text-sm text-slate-500 leading-relaxed">
+          You are about to log out of <span class="font-bold text-[#8B1E7E] break-words"><?= e($displayName) ?></span>.
+          Any unsaved changes will be lost.
+        </p>
+
+        <p class="text-xs text-slate-400 font-medium mt-3 flex items-center gap-1.5">
+          <i data-lucide="info" class="w-3.5 h-3.5"></i> You can log back in anytime.
+        </p>
+      </div>
+
+      <div class="px-6 py-5 mt-2 flex flex-col-reverse sm:flex-row gap-3">
+        <button type="button" onclick="closeLogoutModal()"
+                class="flex-1 px-5 py-3 rounded-xl font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-200 transition-all duration-200 active:scale-95">
+          Cancel
+        </button>
+        <button type="button" id="confirmLogoutBtn"
+                class="flex-1 px-5 py-3 rounded-xl font-bold text-white bg-gradient-to-r from-red-500 via-red-600 to-rose-600 hover:from-red-600 hover:via-red-700 hover:to-rose-700 shadow-lg shadow-red-500/30 hover:shadow-red-500/50 transition-all duration-300 hover:-translate-y-0.5 active:scale-95 flex items-center justify-center gap-2">
+          <i data-lucide="log-out" class="w-4 h-4"></i>
+          <span>Log Out</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
   <!-- HIDDEN FORMS -->
   <form id="deleteForm" method="POST" action="cell_members.php" class="hidden">
     <input type="hidden" name="action" value="delete_member" />
@@ -1268,254 +1285,297 @@ if ($conn instanceof mysqli) {
   </form>
 
   <script>
-    if (typeof lucide !== 'undefined') { lucide.createIcons(); }
+    document.addEventListener('DOMContentLoaded', function () {
 
-    (function () {
-      ['flashSuccessBox', 'flashErrorBox'].forEach(function (id) {
-        const box = document.getElementById(id);
-        if (!box) return;
-        setTimeout(function () {
-          box.classList.remove('animate-flash-in');
-          box.classList.add('animate-flash-out');
-          setTimeout(function () { if (box.parentNode) box.parentNode.removeChild(box); }, 500);
-        }, 3000);
-      });
-    })();
+      if (typeof lucide !== 'undefined') { lucide.createIcons(); }
 
-    (function () {
-      const btn = document.getElementById('admin-dropdown-btn');
-      const menu = document.getElementById('admin-dropdown-menu');
-      const chevron = document.getElementById('admin-chevron');
-      const container = document.getElementById('admin-dropdown-container');
-      if (!btn || !menu || !container) return;
-      btn.addEventListener('click', function (e) {
-        e.stopPropagation();
-        const open = !menu.classList.contains('hidden');
-        if (open) { menu.classList.add('hidden'); menu.classList.remove('animate-dropdown'); if (chevron) chevron.classList.remove('rotate-180'); }
-        else { menu.classList.remove('hidden'); menu.classList.add('animate-dropdown'); if (chevron) chevron.classList.add('rotate-180'); }
-      });
-      document.addEventListener('click', function (e) { if (!container.contains(e.target)) { menu.classList.add('hidden'); menu.classList.remove('animate-dropdown'); if (chevron) chevron.classList.remove('rotate-180'); } });
-    })();
-
-    (function () {
-      [document.getElementById('sidebarLogoutBtn'), document.getElementById('dropdownLogoutBtn')].forEach(function (btn) {
-        if (!btn) return;
-        btn.addEventListener('click', function (e) {
-          if (!window.confirm('Are you sure you want to log out?')) { e.preventDefault(); e.stopPropagation(); return false; }
+      // ---- Auto-dismiss flash ----
+      (function () {
+        ['flashSuccessBox', 'flashErrorBox'].forEach(function (id) {
+          const box = document.getElementById(id);
+          if (!box) return;
+          setTimeout(function () {
+            box.classList.remove('animate-flash-in');
+            box.classList.add('animate-flash-out');
+            setTimeout(function () { if (box.parentNode) box.parentNode.removeChild(box); }, 500);
+          }, 3000);
         });
-      });
-    })();
+      })();
 
-    (function () {
-      const mobileInput = document.getElementById('mobile_number');
-      if (!mobileInput) return;
-      mobileInput.addEventListener('input', function () { this.value = this.value.replace(/\D/g, '').slice(0, 10); });
-    })();
+      // ---- Admin profile dropdown ----
+      (function () {
+        const btn = document.getElementById('admin-dropdown-btn');
+        const menu = document.getElementById('admin-dropdown-menu');
+        const chevron = document.getElementById('admin-chevron');
+        const container = document.getElementById('admin-dropdown-container');
+        if (!btn || !menu || !container) return;
+        btn.addEventListener('click', function (e) {
+          e.stopPropagation();
+          const open = !menu.classList.contains('hidden');
+          if (open) { menu.classList.add('hidden'); menu.classList.remove('animate-dropdown'); if (chevron) chevron.classList.remove('rotate-180'); }
+          else { menu.classList.remove('hidden'); menu.classList.add('animate-dropdown'); if (chevron) chevron.classList.add('rotate-180'); }
+        });
+        document.addEventListener('click', function (e) { if (!container.contains(e.target)) { menu.classList.add('hidden'); menu.classList.remove('animate-dropdown'); if (chevron) chevron.classList.remove('rotate-180'); } });
+        document.addEventListener('keydown', function (e) { if (e.key === 'Escape') { menu.classList.add('hidden'); menu.classList.remove('animate-dropdown'); if (chevron) chevron.classList.remove('rotate-180'); } });
+      })();
 
-    function toggleGrievanceType() {
-      const isMgmt = document.getElementById('is_management');
-      const gBlock = document.getElementById('grievanceTypeBlock');
-      const gSelect = document.getElementById('grievance_type_id');
-      const gReq = document.getElementById('grievanceTypeRequired');
-      if (!isMgmt || !gBlock || !gSelect) return;
+      // ---- Mobile digits only ----
+      (function () {
+        const mobileInput = document.getElementById('mobile_number');
+        if (!mobileInput) return;
+        mobileInput.addEventListener('input', function () { this.value = this.value.replace(/\D/g, '').slice(0, 10); });
+      })();
 
-      if (isMgmt.checked) {
-        gBlock.classList.add('opacity-60');
-        gSelect.removeAttribute('required');
-        if (gReq) gReq.classList.add('hidden');
-        gSelect.value = '';
-      } else {
-        gBlock.classList.remove('opacity-60');
-        gSelect.setAttribute('required', 'required');
-        if (gReq) gReq.classList.remove('hidden');
-      }
-    }
+      // ---- Grievance type toggle ----
+      window.toggleGrievanceType = function () {
+        const isMgmt = document.getElementById('is_management');
+        const gBlock = document.getElementById('grievanceTypeBlock');
+        const gSelect = document.getElementById('grievance_type_id');
+        const gReq = document.getElementById('grievanceTypeRequired');
+        if (!isMgmt || !gBlock || !gSelect) return;
 
-    // -------- Add / Edit Member Modal --------
-    const memberModal      = document.getElementById('memberModal');
-    const memberModalTitle = document.getElementById('memberModalTitle');
-    const memberForm       = document.getElementById('memberForm');
-    const formAction       = document.getElementById('formAction');
-    const formUserId       = document.getElementById('formUserId');
-    const nameInput        = document.getElementById('name');
-    const designationInput = document.getElementById('designation_id');
-    const emailInput       = document.getElementById('email');
-    const mobileInput      = document.getElementById('mobile_number');
-    const isMgmtInput      = document.getElementById('is_management');
-    const gTypeInput       = document.getElementById('grievance_type_id');
+        if (isMgmt.checked) {
+          gBlock.classList.add('opacity-60');
+          gSelect.removeAttribute('required');
+          if (gReq) gReq.classList.add('hidden');
+          gSelect.value = '';
+        } else {
+          gBlock.classList.remove('opacity-60');
+          gSelect.setAttribute('required', 'required');
+          if (gReq) gReq.classList.remove('hidden');
+        }
+      };
 
-    function openMemberModal(mode, userId, name, isManagement, designationId, grievanceTypeId, email, mobile) {
-      memberModal.classList.remove('hidden');
+      // ---- Add / Edit Member Modal ----
+      const memberModal      = document.getElementById('memberModal');
+      const memberModalTitle = document.getElementById('memberModalTitle');
+      const memberForm       = document.getElementById('memberForm');
+      const formAction       = document.getElementById('formAction');
+      const formUserId       = document.getElementById('formUserId');
+      const nameInput        = document.getElementById('name');
+      const designationInput = document.getElementById('designation_id');
+      const emailInput       = document.getElementById('email');
+      const mobileInput      = document.getElementById('mobile_number');
+      const isMgmtInput      = document.getElementById('is_management');
+      const gTypeInput       = document.getElementById('grievance_type_id');
 
-      if (mode === 'edit') {
-        memberModalTitle.textContent = 'Edit Grievance Cell Member';
-        formAction.value = 'edit_member';
-        formUserId.value = userId || '';
-        nameInput.value  = name || '';
-        designationInput.value = designationId ? String(designationId) : '';
-        emailInput.value  = email || '';
-        mobileInput.value = mobile || '';
-        isMgmtInput.checked = String(isManagement) === '1';
-        gTypeInput.value   = grievanceTypeId ? String(grievanceTypeId) : '';
-      } else {
-        memberModalTitle.textContent = 'Create Grievance Cell Member';
+      window.openMemberModal = function (mode, userId, name, isManagement, designationId, grievanceTypeId, email, mobile) {
+        memberModal.classList.remove('hidden');
+
+        if (mode === 'edit') {
+          memberModalTitle.textContent = 'Edit Grievance Cell Member';
+          formAction.value = 'edit_member';
+          formUserId.value = userId || '';
+          nameInput.value  = name || '';
+          designationInput.value = designationId ? String(designationId) : '';
+          emailInput.value  = email || '';
+          mobileInput.value = mobile || '';
+          isMgmtInput.checked = String(isManagement) === '1';
+          gTypeInput.value   = grievanceTypeId ? String(grievanceTypeId) : '';
+        } else {
+          memberModalTitle.textContent = 'Create Grievance Cell Member';
+          formAction.value = 'add_member';
+          formUserId.value = '';
+          memberForm.reset();
+          if (isMgmtInput) isMgmtInput.checked = false;
+          if (gTypeInput) gTypeInput.value = '';
+        }
+
+        window.toggleGrievanceType();
+        setTimeout(() => nameInput && nameInput.focus(), 50);
+        if (typeof lucide !== 'undefined') lucide.createIcons();
+      };
+
+      window.closeMemberModal = function () {
+        memberModal.classList.add('hidden');
+        memberForm.reset();
         formAction.value = 'add_member';
         formUserId.value = '';
-        memberForm.reset();
         if (isMgmtInput) isMgmtInput.checked = false;
-        if (gTypeInput) gTypeInput.value = '';
+      };
+
+      // ---- Set Password Modal ----
+      const setPasswordModal     = document.getElementById('setPasswordModal');
+      const setPasswordForm      = document.getElementById('setPasswordForm');
+      const setPasswordUserIdEl  = document.getElementById('setPasswordUserId');
+      const setPasswordNameEl    = document.getElementById('setPasswordNameDisplay');
+      const newPasswordInput     = document.getElementById('new_password');
+      const confirmPasswordInput = document.getElementById('confirm_password');
+      const setPwdMatchMsg       = document.getElementById('setPwdMatchMsg');
+
+      window.openSetPasswordModal = function (userId, name) {
+        setPasswordUserIdEl.value = userId || '';
+        setPasswordNameEl.textContent = '"' + (name || '') + '"';
+        setPasswordForm.reset();
+        if (setPwdMatchMsg) {
+          setPwdMatchMsg.textContent = 'Passwords must match.';
+          setPwdMatchMsg.classList.remove('text-red-500', 'text-emerald-600');
+          setPwdMatchMsg.classList.add('text-slate-500');
+        }
+        setPasswordModal.classList.remove('hidden');
+        document.body.classList.add('overflow-hidden');
+        setTimeout(() => newPasswordInput && newPasswordInput.focus(), 60);
+        if (typeof lucide !== 'undefined') lucide.createIcons();
+      };
+
+      window.closeSetPasswordModal = function () {
+        setPasswordModal.classList.add('hidden');
+        document.body.classList.remove('overflow-hidden');
+        setPasswordForm.reset();
+      };
+
+      function checkSetPwdMatch() {
+        if (!newPasswordInput || !confirmPasswordInput || !setPwdMatchMsg) return;
+        const a = newPasswordInput.value;
+        const b = confirmPasswordInput.value;
+
+        if (b === '') {
+          setPwdMatchMsg.textContent = 'Passwords must match.';
+          setPwdMatchMsg.classList.remove('text-red-500', 'text-emerald-600');
+          setPwdMatchMsg.classList.add('text-slate-500');
+          return;
+        }
+
+        if (a === b) {
+          setPwdMatchMsg.textContent = 'Passwords match.';
+          setPwdMatchMsg.classList.remove('text-red-500', 'text-slate-500');
+          setPwdMatchMsg.classList.add('text-emerald-600');
+        } else {
+          setPwdMatchMsg.textContent = 'Passwords do not match.';
+          setPwdMatchMsg.classList.remove('text-emerald-600', 'text-slate-500');
+          setPwdMatchMsg.classList.add('text-red-500');
+        }
+      }
+      if (newPasswordInput && confirmPasswordInput) {
+        newPasswordInput.addEventListener('input', checkSetPwdMatch);
+        confirmPasswordInput.addEventListener('input', checkSetPwdMatch);
       }
 
-      toggleGrievanceType();
-      setTimeout(() => nameInput && nameInput.focus(), 50);
-      if (typeof lucide !== 'undefined') lucide.createIcons();
-    }
+      window.togglePwdVisibility = function (inputId, btn) {
+        const input = document.getElementById(inputId);
+        if (!input) return;
+        const isHidden = input.type === 'password';
+        input.type = isHidden ? 'text' : 'password';
+        const icon = btn.querySelector('i');
+        if (icon && typeof lucide !== 'undefined') {
+          icon.setAttribute('data-lucide', isHidden ? 'eye-off' : 'eye');
+          lucide.createIcons({ targets: [icon] });
+        }
+      };
 
-    function closeMemberModal() {
-      memberModal.classList.add('hidden');
-      memberForm.reset();
-      formAction.value = 'add_member';
-      formUserId.value = '';
-      if (isMgmtInput) isMgmtInput.checked = false;
-    }
+      // ---- Delete Modal ----
+      const deleteConfirmModal = document.getElementById('deleteConfirmModal');
+      const deleteConfirmPanel = document.getElementById('deleteConfirmPanel');
+      const deleteMemberNameEl = document.getElementById('deleteMemberNameDisplay');
+      const confirmDeleteBtn   = document.getElementById('confirmDeleteBtn');
+      let pendingDeleteId = null;
 
-    // -------- Set Password Modal --------
-    const setPasswordModal      = document.getElementById('setPasswordModal');
-    const setPasswordForm       = document.getElementById('setPasswordForm');
-    const setPasswordUserIdEl   = document.getElementById('setPasswordUserId');
-    const setPasswordNameEl     = document.getElementById('setPasswordNameDisplay');
-    const newPasswordInput      = document.getElementById('new_password');
-    const confirmPasswordInput  = document.getElementById('confirm_password');
-    const setPwdMatchMsg        = document.getElementById('setPwdMatchMsg');
-
-    function openSetPasswordModal(userId, name) {
-      setPasswordUserIdEl.value = userId || '';
-      setPasswordNameEl.textContent = '"' + (name || '') + '"';
-      setPasswordForm.reset();
-      if (setPwdMatchMsg) {
-        setPwdMatchMsg.textContent = 'Passwords must match.';
-        setPwdMatchMsg.classList.remove('text-red-500', 'text-emerald-600');
-        setPwdMatchMsg.classList.add('text-slate-500');
-      }
-      setPasswordModal.classList.remove('hidden');
-      document.body.classList.add('overflow-hidden');
-      setTimeout(() => newPasswordInput && newPasswordInput.focus(), 60);
-      if (typeof lucide !== 'undefined') lucide.createIcons();
-    }
-
-    function closeSetPasswordModal() {
-      setPasswordModal.classList.add('hidden');
-      document.body.classList.remove('overflow-hidden');
-      setPasswordForm.reset();
-    }
-
-    function checkSetPwdMatch() {
-      if (!newPasswordInput || !confirmPasswordInput || !setPwdMatchMsg) return;
-      const a = newPasswordInput.value;
-      const b = confirmPasswordInput.value;
-
-      if (b === '') {
-        setPwdMatchMsg.textContent = 'Passwords must match.';
-        setPwdMatchMsg.classList.remove('text-red-500', 'text-emerald-600');
-        setPwdMatchMsg.classList.add('text-slate-500');
-        return;
-      }
-
-      if (a === b) {
-        setPwdMatchMsg.textContent = 'Passwords match.';
-        setPwdMatchMsg.classList.remove('text-red-500', 'text-slate-500');
-        setPwdMatchMsg.classList.add('text-emerald-600');
-      } else {
-        setPwdMatchMsg.textContent = 'Passwords do not match.';
-        setPwdMatchMsg.classList.remove('text-emerald-600', 'text-slate-500');
-        setPwdMatchMsg.classList.add('text-red-500');
-      }
-    }
-    if (newPasswordInput && confirmPasswordInput) {
-      newPasswordInput.addEventListener('input', checkSetPwdMatch);
-      confirmPasswordInput.addEventListener('input', checkSetPwdMatch);
-    }
-
-    function togglePwdVisibility(inputId, btn) {
-      const input = document.getElementById(inputId);
-      if (!input) return;
-      const isHidden = input.type === 'password';
-      input.type = isHidden ? 'text' : 'password';
-      const icon = btn.querySelector('i');
-      if (icon && typeof lucide !== 'undefined') {
-        icon.setAttribute('data-lucide', isHidden ? 'eye-off' : 'eye');
-        lucide.createIcons({ targets: [icon] });
-      }
-    }
-
-    // -------- Delete Modal --------
-    const deleteConfirmModal = document.getElementById('deleteConfirmModal');
-    const deleteConfirmPanel = document.getElementById('deleteConfirmPanel');
-    const deleteMemberNameEl = document.getElementById('deleteMemberNameDisplay');
-    const confirmDeleteBtn   = document.getElementById('confirmDeleteBtn');
-    let pendingDeleteId = null;
-
-    function confirmDeleteMember(userId, name) {
-      pendingDeleteId = userId;
-      if (deleteMemberNameEl) deleteMemberNameEl.textContent = '"' + name + '"';
-      deleteConfirmModal.classList.remove('hidden');
-      document.body.classList.add('overflow-hidden');
-      if (deleteConfirmPanel) { deleteConfirmPanel.classList.remove('animate-confirm-shake'); void deleteConfirmPanel.offsetWidth; deleteConfirmPanel.classList.add('animate-confirm-shake'); }
-      setTimeout(function () { if (confirmDeleteBtn) confirmDeleteBtn.focus(); }, 80);
-      if (typeof lucide !== 'undefined') lucide.createIcons();
-    }
-    function closeDeleteModal() { deleteConfirmModal.classList.add('hidden'); document.body.classList.remove('overflow-hidden'); pendingDeleteId = null; }
-    if (confirmDeleteBtn) confirmDeleteBtn.addEventListener('click', function () {
-      if (pendingDeleteId === null) return closeDeleteModal();
-      const input = document.getElementById('deleteMemberId');
-      const form = document.getElementById('deleteForm');
-      if (input && form) { input.value = String(pendingDeleteId); form.submit(); }
-    });
-
-    // -------- Deactivate Modal --------
-    const deactivateConfirmModal = document.getElementById('deactivateConfirmModal');
-    const deactivateConfirmPanel = document.getElementById('deactivateConfirmPanel');
-    const deactivateMemberNameEl = document.getElementById('deactivateMemberNameDisplay');
-    const confirmDeactivateBtn   = document.getElementById('confirmDeactivateBtn');
-    let pendingDeactivateId = null;
-
-    function confirmDeactivate(userId, name) {
-      pendingDeactivateId = userId;
-      if (deactivateMemberNameEl) deactivateMemberNameEl.textContent = '"' + name + '"';
-      deactivateConfirmModal.classList.remove('hidden');
-      document.body.classList.add('overflow-hidden');
-      if (deactivateConfirmPanel) { deactivateConfirmPanel.classList.remove('animate-confirm-shake'); void deactivateConfirmPanel.offsetWidth; deactivateConfirmPanel.classList.add('animate-confirm-shake'); }
-      setTimeout(function () { if (confirmDeactivateBtn) confirmDeactivateBtn.focus(); }, 80);
-      if (typeof lucide !== 'undefined') lucide.createIcons();
-    }
-    function closeDeactivateModal() { deactivateConfirmModal.classList.add('hidden'); document.body.classList.remove('overflow-hidden'); pendingDeactivateId = null; }
-    if (confirmDeactivateBtn) confirmDeactivateBtn.addEventListener('click', function () {
-      if (pendingDeactivateId === null) return closeDeactivateModal();
-      const input = document.getElementById('deactivateMemberId');
-      const form = document.getElementById('deactivateForm');
-      if (input && form) { input.value = String(pendingDeactivateId); form.submit(); }
-    });
-
-    // -------- Live search --------
-    (function () {
-      const searchInput = document.getElementById('searchInput');
-      const tableBody = document.getElementById('membersTableBody');
-      if (!searchInput || !tableBody) return;
-      searchInput.addEventListener('input', function () {
-        const term = this.value.toLowerCase().trim();
-        tableBody.querySelectorAll('tr').forEach(function (row) {
-          row.style.display = (term === '' || row.textContent.toLowerCase().indexOf(term) !== -1) ? '' : 'none';
-        });
+      window.confirmDeleteMember = function (userId, name) {
+        pendingDeleteId = userId;
+        if (deleteMemberNameEl) deleteMemberNameEl.textContent = '"' + name + '"';
+        deleteConfirmModal.classList.remove('hidden');
+        document.body.classList.add('overflow-hidden');
+        if (deleteConfirmPanel) { deleteConfirmPanel.classList.remove('animate-confirm-shake'); void deleteConfirmPanel.offsetWidth; deleteConfirmPanel.classList.add('animate-confirm-shake'); }
+        setTimeout(function () { if (confirmDeleteBtn) confirmDeleteBtn.focus(); }, 80);
+        if (typeof lucide !== 'undefined') lucide.createIcons();
+      };
+      window.closeDeleteModal = function () { deleteConfirmModal.classList.add('hidden'); document.body.classList.remove('overflow-hidden'); pendingDeleteId = null; };
+      if (confirmDeleteBtn) confirmDeleteBtn.addEventListener('click', function () {
+        if (pendingDeleteId === null) return window.closeDeleteModal();
+        const input = document.getElementById('deleteMemberId');
+        const form = document.getElementById('deleteForm');
+        if (input && form) { input.value = String(pendingDeleteId); form.submit(); }
       });
-    })();
 
-    // -------- Escape closes any modal --------
-    document.addEventListener('keydown', function (e) {
-      if (e.key !== 'Escape') return;
-      if (memberModal && !memberModal.classList.contains('hidden')) closeMemberModal();
-      if (setPasswordModal && !setPasswordModal.classList.contains('hidden')) closeSetPasswordModal();
-      if (deleteConfirmModal && !deleteConfirmModal.classList.contains('hidden')) closeDeleteModal();
-      if (deactivateConfirmModal && !deactivateConfirmModal.classList.contains('hidden')) closeDeactivateModal();
+      // ---- Deactivate Modal ----
+      const deactivateConfirmModal = document.getElementById('deactivateConfirmModal');
+      const deactivateConfirmPanel = document.getElementById('deactivateConfirmPanel');
+      const deactivateMemberNameEl = document.getElementById('deactivateMemberNameDisplay');
+      const confirmDeactivateBtn   = document.getElementById('confirmDeactivateBtn');
+      let pendingDeactivateId = null;
+
+      window.confirmDeactivate = function (userId, name) {
+        pendingDeactivateId = userId;
+        if (deactivateMemberNameEl) deactivateMemberNameEl.textContent = '"' + name + '"';
+        deactivateConfirmModal.classList.remove('hidden');
+        document.body.classList.add('overflow-hidden');
+        if (deactivateConfirmPanel) { deactivateConfirmPanel.classList.remove('animate-confirm-shake'); void deactivateConfirmPanel.offsetWidth; deactivateConfirmPanel.classList.add('animate-confirm-shake'); }
+        setTimeout(function () { if (confirmDeactivateBtn) confirmDeactivateBtn.focus(); }, 80);
+        if (typeof lucide !== 'undefined') lucide.createIcons();
+      };
+      window.closeDeactivateModal = function () { deactivateConfirmModal.classList.add('hidden'); document.body.classList.remove('overflow-hidden'); pendingDeactivateId = null; };
+      if (confirmDeactivateBtn) confirmDeactivateBtn.addEventListener('click', function () {
+        if (pendingDeactivateId === null) return window.closeDeactivateModal();
+        const input = document.getElementById('deactivateMemberId');
+        const form = document.getElementById('deactivateForm');
+        if (input && form) { input.value = String(pendingDeactivateId); form.submit(); }
+      });
+
+      // ---- Logout Confirmation Modal ----
+      (function () {
+        const logoutConfirmModal = document.getElementById('logoutConfirmModal');
+        const logoutConfirmPanel = document.getElementById('logoutConfirmPanel');
+        const confirmLogoutBtn   = document.getElementById('confirmLogoutBtn');
+        const LOGOUT_URL         = '../logout.php?role=admin';
+
+        if (!logoutConfirmModal) return;
+
+        window.openLogoutModal = function () {
+          logoutConfirmModal.classList.remove('hidden');
+          document.body.classList.add('overflow-hidden');
+          if (logoutConfirmPanel) {
+            logoutConfirmPanel.classList.remove('animate-confirm-shake');
+            void logoutConfirmPanel.offsetWidth;
+            logoutConfirmPanel.classList.add('animate-confirm-shake');
+          }
+          setTimeout(function () { if (confirmLogoutBtn) confirmLogoutBtn.focus(); }, 80);
+          if (typeof lucide !== 'undefined') lucide.createIcons();
+        };
+        window.closeLogoutModal = function () {
+          logoutConfirmModal.classList.add('hidden');
+          document.body.classList.remove('overflow-hidden');
+        };
+
+        [document.getElementById('sidebarLogoutBtn'), document.getElementById('dropdownLogoutBtn')].forEach(function (btn) {
+          if (!btn) return;
+          btn.addEventListener('click', function (e) {
+            e.preventDefault();
+            e.stopPropagation();
+            window.openLogoutModal();
+          });
+        });
+
+        if (confirmLogoutBtn) {
+          confirmLogoutBtn.addEventListener('click', function () {
+            confirmLogoutBtn.classList.add('opacity-50', 'pointer-events-none');
+            window.location.href = LOGOUT_URL;
+          });
+        }
+      })();
+
+      // ---- Live search ----
+      (function () {
+        const searchInput = document.getElementById('searchInput');
+        const tableBody = document.getElementById('membersTableBody');
+        if (!searchInput || !tableBody) return;
+        searchInput.addEventListener('input', function () {
+          const term = this.value.toLowerCase().trim();
+          tableBody.querySelectorAll('tr').forEach(function (row) {
+            row.style.display = (term === '' || row.textContent.toLowerCase().indexOf(term) !== -1) ? '' : 'none';
+          });
+        });
+      })();
+
+      // ---- Escape closes any modal ----
+      document.addEventListener('keydown', function (e) {
+        if (e.key !== 'Escape') return;
+        if (memberModal && !memberModal.classList.contains('hidden')) window.closeMemberModal();
+        if (setPasswordModal && !setPasswordModal.classList.contains('hidden')) window.closeSetPasswordModal();
+        if (deleteConfirmModal && !deleteConfirmModal.classList.contains('hidden')) window.closeDeleteModal();
+        if (deactivateConfirmModal && !deactivateConfirmModal.classList.contains('hidden')) window.closeDeactivateModal();
+        if (logoutConfirmModal && !logoutConfirmModal.classList.contains('hidden')) window.closeLogoutModal();
+      });
+
     });
   </script>
 

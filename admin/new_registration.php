@@ -19,6 +19,7 @@
  *   • View full details (eye icon → modal)
  *   • Delete registration permanently
  *   • Themed modals & flash messages (auto-dismiss after 3 seconds)
+ *   • Themed logout confirmation modal
  * ---------------------------------------------------------------------------
  */
 
@@ -261,7 +262,6 @@ if (!empty($_SESSION['flash_error'])) {
 
 // ---------------------------------------------------------------------------
 // FETCH PENDING REGISTRATIONS
-//    Pull every role-specific column so the View modal can show full details.
 // ---------------------------------------------------------------------------
 $registrations = [];
 
@@ -273,12 +273,10 @@ if ($conn instanceof mysqli) {
                         u.status,
                         u.created_at AS user_created_at,
 
-                        -- Unified main fields
                         COALESCE(s.name,   p.name,   st.name,   cm.name)   AS name,
                         COALESCE(s.email,  p.email,  st.email,  cm.email)  AS email,
                         COALESCE(s.address, p.address, st.address, cm.address) AS address,
 
-                        -- STUDENT fields
                         s.admission_number          AS student_admission_number,
                         s.contact_number            AS student_contact_number,
                         s.whatsapp_number           AS student_whatsapp_number,
@@ -288,13 +286,11 @@ if ($conn instanceof mysqli) {
                         cls.class_name              AS student_class_name,
                         crs.course_name             AS student_course_name,
 
-                        -- PARENT fields
                         p.contact_number            AS parent_contact_number,
                         p.whatsapp_number           AS parent_whatsapp_number,
                         p.relation                  AS parent_relation,
                         p.profile_image             AS parent_profile_image,
 
-                        -- STAFF fields
                         st.gender                   AS staff_gender,
                         st.contact_number           AS staff_contact_number,
                         st.whatsapp_number          AS staff_whatsapp_number,
@@ -304,7 +300,6 @@ if ($conn instanceof mysqli) {
                         st_des.designation_name     AS staff_designation_name,
                         st_dept.department_name     AS staff_department_name,
 
-                        -- CELL MEMBER / MANAGEMENT fields
                         cm.member_type              AS cm_member_type,
                         cm.mobile_number            AS cm_mobile_number,
                         cm.whatsapp_number          AS cm_whatsapp_number,
@@ -412,7 +407,12 @@ if ($conn instanceof mysqli) {
           <span class="absolute left-full ml-3 hidden group-hover:block whitespace-nowrap bg-[#4A154B] text-white text-xs px-3 py-1.5 rounded-lg shadow-lg z-50">Back to Members</span>
         </a>
       </nav>
-      <a href="../logout.php?role=admin" id="sidebarLogoutBtn" class="group relative w-12 h-12 rounded-xl bg-white/10 hover:bg-red-500/40 flex items-center justify-center text-white transition-all hover:scale-110" title="Logout">
+
+      <!-- Logout Trigger -->
+      <a href="#" data-logout-trigger="1"
+         id="sidebarLogoutBtn"
+         class="group relative w-12 h-12 rounded-xl bg-white/10 hover:bg-red-500/40 flex items-center justify-center text-white transition-all hover:scale-110"
+         title="Logout">
         <i data-lucide="log-out" class="w-6 h-6 group-hover:translate-x-0.5 transition-transform"></i>
         <span class="absolute left-full ml-3 hidden group-hover:block whitespace-nowrap bg-red-600 text-white text-xs px-3 py-1.5 rounded-lg shadow-lg z-50">Logout</span>
       </a>
@@ -471,7 +471,9 @@ if ($conn instanceof mysqli) {
                 <i data-lucide="key" class="w-4 h-4 mr-3 text-[#8B1E7E]"></i><span class="font-medium">Change Password</span>
               </a>
               <div class="border-t border-slate-100 mt-2 pt-2">
-                <a href="../logout.php?role=admin" id="dropdownLogoutBtn" class="flex items-center px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 transition-all duration-200 group/item">
+                <a href="#" data-logout-trigger="1"
+                   id="dropdownLogoutBtn"
+                   class="flex items-center px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 transition-all duration-200 group/item">
                   <i data-lucide="log-out" class="w-4 h-4 mr-3"></i><span class="font-medium">Logout</span>
                 </a>
               </div>
@@ -483,7 +485,6 @@ if ($conn instanceof mysqli) {
       <!-- PAGE CONTENT -->
       <main class="flex-1 px-6 py-8">
 
-        <!-- Breadcrumb + Top Right Approve Button -->
         <div class="max-w-6xl mx-auto mb-6 animate-fade-in-up">
           <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
             <div>
@@ -508,7 +509,6 @@ if ($conn instanceof mysqli) {
           </div>
         </div>
 
-        <!-- Flash Messages -->
         <?php if ($flashSuccess !== ''): ?>
           <div id="flashSuccessBox" class="max-w-6xl mx-auto mb-6 rounded-xl border-2 border-emerald-200 bg-emerald-50 px-4 py-3 flex items-start space-x-2 animate-flash-in overflow-hidden">
             <i data-lucide="check-circle" class="w-5 h-5 text-[#006837] flex-shrink-0 mt-0.5"></i>
@@ -523,7 +523,6 @@ if ($conn instanceof mysqli) {
           </div>
         <?php endif; ?>
 
-        <!-- TABLE CONTROLS -->
         <div class="max-w-6xl mx-auto mb-5 animate-fade-in-up" style="animation-delay: 80ms;">
           <div class="bg-white rounded-xl shadow-sm border border-slate-200/70 px-5 py-4">
             <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -546,7 +545,6 @@ if ($conn instanceof mysqli) {
           </div>
         </div>
 
-        <!-- DATA TABLE -->
         <div class="max-w-6xl mx-auto animate-fade-in-up" style="animation-delay: 120ms;">
           <div class="bg-white rounded-2xl shadow-lg border border-slate-200/70 overflow-hidden">
 
@@ -595,7 +593,6 @@ if ($conn instanceof mysqli) {
                           $regAddr   = (string) ($reg['address'] ?? 'N/A');
                           $regRole   = (string) ($reg['role']    ?? '');
 
-                          // Build a compact, role-aware payload for the View modal
                           $viewPayload = [
                               'user_id'    => $regUserId,
                               'username'   => (string) ($reg['username'] ?? ''),
@@ -636,7 +633,6 @@ if ($conn instanceof mysqli) {
                                   'profile_image'     => (string) ($reg['staff_profile_image']    ?? ''),
                               ];
                           } else {
-                              // MANAGEMENT (or fallback) → cell_members
                               $viewPayload['member'] = [
                                   'member_type'         => (string) ($reg['cm_member_type']           ?? ''),
                                   'mobile_number'       => (string) ($reg['cm_mobile_number']         ?? ''),
@@ -663,7 +659,6 @@ if ($conn instanceof mysqli) {
                           <td class="px-6 py-4 whitespace-nowrap">
                             <div class="flex items-center justify-center gap-2">
 
-                              <!-- View -->
                               <button type="button"
                                       title="View details"
                                       data-view-trigger="1"
@@ -672,7 +667,6 @@ if ($conn instanceof mysqli) {
                                 <i data-lucide="eye" class="w-4 h-4 pointer-events-none"></i>
                               </button>
 
-                              <!-- Approve Single -->
                               <button type="button"
                                       title="Approve this registration"
                                       onclick='confirmApprove(<?= $regUserId ?>, <?= json_encode($regName) ?>)'
@@ -680,7 +674,6 @@ if ($conn instanceof mysqli) {
                                 <i data-lucide="check" class="w-4 h-4"></i>
                               </button>
 
-                              <!-- Delete -->
                               <button type="button"
                                       title="Delete registration"
                                       onclick='confirmDelete(<?= $regUserId ?>, <?= json_encode($regName) ?>)'
@@ -719,7 +712,6 @@ if ($conn instanceof mysqli) {
 
       </main>
 
-      <!-- FOOTER -->
       <footer class="bg-gradient-to-r from-purple-200 via-pink-100 to-purple-200 border-t border-purple-200/60 mt-auto">
         <div class="px-6 py-6">
           <div class="max-w-7xl mx-auto text-center">
@@ -738,9 +730,7 @@ if ($conn instanceof mysqli) {
     </div>
   </div>
 
-  <!-- ============================================================
-       VIEW DETAILS MODAL
-       ============================================================ -->
+  <!-- VIEW DETAILS MODAL -->
   <div id="viewDetailsModal" class="hidden fixed inset-0 z-[60] flex items-center justify-center p-4">
     <div class="absolute inset-0 bg-black/40 backdrop-blur-sm" onclick="closeViewModal()"></div>
 
@@ -755,8 +745,6 @@ if ($conn instanceof mysqli) {
       </div>
 
       <div class="p-6 overflow-y-auto flex-1 space-y-5">
-
-        <!-- Header card -->
         <div class="flex items-start space-x-4 pb-4 border-b border-slate-100">
           <div id="viewAvatar" class="w-16 h-16 rounded-full bg-gradient-to-br from-[#4A154B] to-[#8B1E7E] flex items-center justify-center text-white shadow-md flex-shrink-0 overflow-hidden">
             <i data-lucide="user" class="w-8 h-8"></i>
@@ -771,7 +759,6 @@ if ($conn instanceof mysqli) {
           </div>
         </div>
 
-        <!-- Common details -->
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div class="bg-slate-50 rounded-xl p-3 border border-slate-100">
             <p class="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1">Username</p>
@@ -788,9 +775,7 @@ if ($conn instanceof mysqli) {
           <p id="viewAddress" class="text-sm text-slate-700 break-words whitespace-pre-line">—</p>
         </div>
 
-        <!-- Role-specific section (rendered dynamically) -->
         <div id="viewRoleSection"></div>
-
       </div>
 
       <div class="px-6 py-4 bg-slate-50 border-t border-slate-100 flex justify-end">
@@ -802,9 +787,7 @@ if ($conn instanceof mysqli) {
     </div>
   </div>
 
-  <!-- ============================================================
-       APPROVE CONFIRMATION MODAL
-       ============================================================ -->
+  <!-- APPROVE CONFIRMATION MODAL -->
   <div id="approveConfirmModal" class="hidden fixed inset-0 z-[70] flex items-center justify-center p-4">
     <div class="absolute inset-0 bg-black/50 backdrop-blur-sm" onclick="closeApproveModal()"></div>
 
@@ -835,9 +818,7 @@ if ($conn instanceof mysqli) {
     </div>
   </div>
 
-  <!-- ============================================================
-       DELETE CONFIRMATION MODAL
-       ============================================================ -->
+  <!-- DELETE CONFIRMATION MODAL -->
   <div id="deleteConfirmModal" class="hidden fixed inset-0 z-[70] flex items-center justify-center p-4">
     <div class="absolute inset-0 bg-black/50 backdrop-blur-sm" onclick="closeDeleteModal()"></div>
 
@@ -871,6 +852,46 @@ if ($conn instanceof mysqli) {
     </div>
   </div>
 
+  <!-- ============================================================= -->
+  <!-- LOGOUT CONFIRMATION MODAL                                     -->
+  <!-- ============================================================= -->
+  <div id="logoutConfirmModal" class="hidden fixed inset-0 z-[70] flex items-center justify-center p-4">
+    <div class="absolute inset-0 bg-black/50 backdrop-blur-sm" onclick="closeLogoutModal()"></div>
+
+    <div id="logoutConfirmPanel" class="relative w-full max-w-md bg-white rounded-2xl shadow-2xl animate-modal-in overflow-hidden">
+      <div class="h-1.5 w-full bg-gradient-to-r from-[#6A2C8A] via-[#8B1E7E] to-[#C43A7A]"></div>
+
+      <div class="px-6 pt-6 pb-2 flex flex-col items-center text-center">
+        <div class="w-16 h-16 rounded-full flex items-center justify-center mb-4 bg-gradient-to-br from-red-100 to-pink-100 ring-4 ring-red-50">
+          <i data-lucide="log-out" class="w-8 h-8 text-red-500"></i>
+        </div>
+
+        <h3 class="text-xl font-bold text-slate-800 mb-2">Log Out?</h3>
+
+        <p class="text-sm text-slate-500 leading-relaxed">
+          You are about to log out of <span class="font-bold text-[#8B1E7E] break-words"><?= e($displayName) ?></span>.
+          Any unsaved changes will be lost.
+        </p>
+
+        <p class="text-xs text-slate-400 font-medium mt-3 flex items-center gap-1.5">
+          <i data-lucide="info" class="w-3.5 h-3.5"></i> You can log back in anytime.
+        </p>
+      </div>
+
+      <div class="px-6 py-5 mt-2 flex flex-col-reverse sm:flex-row gap-3">
+        <button type="button" onclick="closeLogoutModal()"
+                class="flex-1 px-5 py-3 rounded-xl font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-200 transition-all duration-200 active:scale-95">
+          Cancel
+        </button>
+        <button type="button" id="confirmLogoutBtn"
+                class="flex-1 px-5 py-3 rounded-xl font-bold text-white bg-gradient-to-r from-red-500 via-red-600 to-rose-600 hover:from-red-600 hover:via-red-700 hover:to-rose-700 shadow-lg shadow-red-500/30 hover:shadow-red-500/50 transition-all duration-300 hover:-translate-y-0.5 active:scale-95 flex items-center justify-center gap-2">
+          <i data-lucide="log-out" class="w-4 h-4"></i>
+          <span>Log Out</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
   <!-- HIDDEN FORMS -->
   <form id="approveForm" method="POST" action="new_registration.php" class="hidden">
     <input type="hidden" name="action" value="approve_single" />
@@ -883,298 +904,331 @@ if ($conn instanceof mysqli) {
   </form>
 
   <script>
-    if (typeof lucide !== 'undefined') { lucide.createIcons(); }
+    document.addEventListener('DOMContentLoaded', function () {
 
-    // ---- Auto-dismiss flash messages after 3 seconds ----
-    (function () {
-      ['flashSuccessBox', 'flashErrorBox'].forEach(function (id) {
-        const box = document.getElementById(id);
-        if (!box) return;
-        setTimeout(function () {
-          box.classList.remove('animate-flash-in');
-          box.classList.add('animate-flash-out');
-          setTimeout(function () { if (box.parentNode) box.parentNode.removeChild(box); }, 500);
-        }, 3000);
-      });
-    })();
+      if (typeof lucide !== 'undefined') { lucide.createIcons(); }
 
-    // ---- Admin profile dropdown ----
-    (function () {
-      const btn = document.getElementById('admin-dropdown-btn');
-      const menu = document.getElementById('admin-dropdown-menu');
-      const chevron = document.getElementById('admin-chevron');
-      const container = document.getElementById('admin-dropdown-container');
-      if (!btn || !menu || !container) return;
-      btn.addEventListener('click', function (e) {
-        e.stopPropagation();
-        const open = !menu.classList.contains('hidden');
-        if (open) { menu.classList.add('hidden'); menu.classList.remove('animate-dropdown'); if (chevron) chevron.classList.remove('rotate-180'); }
-        else { menu.classList.remove('hidden'); menu.classList.add('animate-dropdown'); if (chevron) chevron.classList.add('rotate-180'); }
-      });
-      document.addEventListener('click', function (e) { if (!container.contains(e.target)) { menu.classList.add('hidden'); menu.classList.remove('animate-dropdown'); if (chevron) chevron.classList.remove('rotate-180'); } });
-    })();
+      // ---- Auto-dismiss flash ----
+      (function () {
+        ['flashSuccessBox', 'flashErrorBox'].forEach(function (id) {
+          const box = document.getElementById(id);
+          if (!box) return;
+          setTimeout(function () {
+            box.classList.remove('animate-flash-in');
+            box.classList.add('animate-flash-out');
+            setTimeout(function () { if (box.parentNode) box.parentNode.removeChild(box); }, 500);
+          }, 3000);
+        });
+      })();
 
-    // ---- Logout confirmation ----
-    (function () {
-      [document.getElementById('sidebarLogoutBtn'), document.getElementById('dropdownLogoutBtn')].forEach(function (btn) {
-        if (!btn) return;
+      // ---- Admin profile dropdown ----
+      (function () {
+        const btn = document.getElementById('admin-dropdown-btn');
+        const menu = document.getElementById('admin-dropdown-menu');
+        const chevron = document.getElementById('admin-chevron');
+        const container = document.getElementById('admin-dropdown-container');
+        if (!btn || !menu || !container) return;
         btn.addEventListener('click', function (e) {
-          if (!window.confirm('Are you sure you want to log out?')) { e.preventDefault(); e.stopPropagation(); return false; }
+          e.stopPropagation();
+          const open = !menu.classList.contains('hidden');
+          if (open) { menu.classList.add('hidden'); menu.classList.remove('animate-dropdown'); if (chevron) chevron.classList.remove('rotate-180'); }
+          else { menu.classList.remove('hidden'); menu.classList.add('animate-dropdown'); if (chevron) chevron.classList.add('rotate-180'); }
         });
-      });
-    })();
+        document.addEventListener('click', function (e) { if (!container.contains(e.target)) { menu.classList.add('hidden'); menu.classList.remove('animate-dropdown'); if (chevron) chevron.classList.remove('rotate-180'); } });
+        document.addEventListener('keydown', function (e) { if (e.key === 'Escape') { menu.classList.add('hidden'); menu.classList.remove('animate-dropdown'); if (chevron) chevron.classList.remove('rotate-180'); } });
+      })();
 
-    // ---- Select All Checkbox ----
-    (function () {
-      const selectAll = document.getElementById('selectAllCheckbox');
-      const checkboxes = document.querySelectorAll('.reg-checkbox');
-      if (!selectAll) return;
+      // ---- Select All Checkbox ----
+      (function () {
+        const selectAll = document.getElementById('selectAllCheckbox');
+        const checkboxes = document.querySelectorAll('.reg-checkbox');
+        if (!selectAll) return;
 
-      selectAll.addEventListener('change', function () {
-        checkboxes.forEach(function (cb) { cb.checked = selectAll.checked; });
-      });
-      checkboxes.forEach(function (cb) {
-        cb.addEventListener('change', function () {
-          const allChecked = Array.from(checkboxes).every(c => c.checked);
-          const anyChecked = Array.from(checkboxes).some(c => c.checked);
-          selectAll.checked = allChecked;
-          selectAll.indeterminate = anyChecked && !allChecked;
+        selectAll.addEventListener('change', function () {
+          checkboxes.forEach(function (cb) { cb.checked = selectAll.checked; });
         });
-      });
-    })();
+        checkboxes.forEach(function (cb) {
+          cb.addEventListener('change', function () {
+            const allChecked = Array.from(checkboxes).every(c => c.checked);
+            const anyChecked = Array.from(checkboxes).some(c => c.checked);
+            selectAll.checked = allChecked;
+            selectAll.indeterminate = anyChecked && !allChecked;
+          });
+        });
+      })();
 
-    // ---- Approve Checked (bulk) ----
-    function approveChecked() {
-      const checked = document.querySelectorAll('.reg-checkbox:checked');
-      if (checked.length === 0) {
-        alert('Please select at least one registration to approve.');
-        return;
+      // ---- Helpers ----
+      function escapeHtml(str) {
+        return String(str == null ? '' : str)
+          .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
       }
-      const form = document.getElementById('bulkApproveForm');
-      if (form) form.submit();
-    }
-
-    // ---- Helpers ----
-    function escapeHtml(str) {
-      return String(str == null ? '' : str)
-        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-    }
-    function dash(v) {
-      const s = (v == null) ? '' : String(v).trim();
-      return s === '' ? '—' : s;
-    }
-    function formatDate(yyyymmdd) {
-      if (!yyyymmdd) return '—';
-      const d = new Date(String(yyyymmdd).replace(' ', 'T'));
-      if (isNaN(d.getTime())) return String(yyyymmdd);
-      const pad = n => String(n).padStart(2, '0');
-      return pad(d.getDate()) + '-' + pad(d.getMonth() + 1) + '-' + d.getFullYear()
-           + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
-    }
-    function kv(label, value) {
-      return '<div class="bg-slate-50 rounded-xl p-3 border border-slate-100">'
-           +   '<p class="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1">' + escapeHtml(label) + '</p>'
-           +   '<p class="text-sm font-semibold text-slate-800 break-words">' + escapeHtml(dash(value)) + '</p>'
-           + '</div>';
-    }
-
-    // ---- View Details Modal ----
-    const viewDetailsModal = document.getElementById('viewDetailsModal');
-    const viewRoleSection  = document.getElementById('viewRoleSection');
-
-    function renderRoleSection(data) {
-      const role = (data.role || '').toUpperCase();
-
-      let html = '';
-
-      if (role === 'STUDENT' && data.student) {
-        const s = data.student;
-        html += '<div class="grid grid-cols-1 sm:grid-cols-2 gap-4">'
-             +    kv('Admission Number', s.admission_number)
-             +    kv('Course',          s.course_name)
-             +    kv('Class / Semester', s.class_name)
-             +    kv('Guardian Name',   s.guardian_name)
-             +    kv('Contact Number',  s.contact_number)
-             +    kv('WhatsApp Number', s.whatsapp_number)
-             +  '</div>';
-      } else if (role === 'PARENT' && data.parent) {
-        const p = data.parent;
-        html += '<div class="grid grid-cols-1 sm:grid-cols-2 gap-4">'
-             +    kv('Relation',        p.relation)
-             +    kv('Contact Number',  p.contact_number)
-             +    kv('WhatsApp Number', p.whatsapp_number)
-             +  '</div>';
-      } else if ((role === 'TEACHER' || role === 'NON_TEACHING') && data.staff) {
-        const st = data.staff;
-        html += '<div class="grid grid-cols-1 sm:grid-cols-2 gap-4">'
-             +    kv('Employee ID',    st.employee_id)
-             +    kv('Staff Type',     st.staff_type)
-             +    kv('Gender',         st.gender)
-             +    kv('Designation',    st.designation_name)
-             +    kv('Department',     st.department_name)
-             +    kv('Contact Number', st.contact_number)
-             +    kv('WhatsApp Number', st.whatsapp_number)
-             +  '</div>';
-      } else if (data.member) {
-        const m = data.member;
-        html += '<div class="grid grid-cols-1 sm:grid-cols-2 gap-4">'
-             +    kv('Member Type',      m.member_type)
-             +    kv('Designation',      m.designation_name)
-             +    kv('Department',       m.department_name)
-             +    kv('Grievance Type',   m.grievance_type_name)
-             +    kv('Mobile Number',    m.mobile_number)
-             +    kv('WhatsApp Number',  m.whatsapp_number)
-             +  '</div>';
+      function dash(v) {
+        const s = (v == null) ? '' : String(v).trim();
+        return s === '' ? '—' : s;
+      }
+      function formatDate(yyyymmdd) {
+        if (!yyyymmdd) return '—';
+        const d = new Date(String(yyyymmdd).replace(' ', 'T'));
+        if (isNaN(d.getTime())) return String(yyyymmdd);
+        const pad = n => String(n).padStart(2, '0');
+        return pad(d.getDate()) + '-' + pad(d.getMonth() + 1) + '-' + d.getFullYear()
+             + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+      }
+      function kv(label, value) {
+        return '<div class="bg-slate-50 rounded-xl p-3 border border-slate-100">'
+             +   '<p class="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1">' + escapeHtml(label) + '</p>'
+             +   '<p class="text-sm font-semibold text-slate-800 break-words">' + escapeHtml(dash(value)) + '</p>'
+             + '</div>';
       }
 
-      viewRoleSection.innerHTML = html;
-    }
+      // ---- View Details Modal ----
+      const viewDetailsModal = document.getElementById('viewDetailsModal');
+      const viewRoleSection  = document.getElementById('viewRoleSection');
 
-    function openViewModal(data) {
-      if (!data) return;
+      function renderRoleSection(data) {
+        const role = (data.role || '').toUpperCase();
+        let html = '';
 
-      document.getElementById('viewName').textContent     = dash(data.name);
-      document.getElementById('viewEmail').textContent    = dash(data.email);
-      document.getElementById('viewUsername').textContent = dash(data.username);
-      document.getElementById('viewAddress').textContent  = dash(data.address);
-      document.getElementById('viewCreatedAt').textContent = formatDate(data.created_at);
+        if (role === 'STUDENT' && data.student) {
+          const s = data.student;
+          html += '<div class="grid grid-cols-1 sm:grid-cols-2 gap-4">'
+               +    kv('Admission Number', s.admission_number)
+               +    kv('Course',          s.course_name)
+               +    kv('Class / Semester', s.class_name)
+               +    kv('Guardian Name',   s.guardian_name)
+               +    kv('Contact Number',  s.contact_number)
+               +    kv('WhatsApp Number', s.whatsapp_number)
+               +  '</div>';
+        } else if (role === 'PARENT' && data.parent) {
+          const p = data.parent;
+          html += '<div class="grid grid-cols-1 sm:grid-cols-2 gap-4">'
+               +    kv('Relation',        p.relation)
+               +    kv('Contact Number',  p.contact_number)
+               +    kv('WhatsApp Number', p.whatsapp_number)
+               +  '</div>';
+        } else if ((role === 'TEACHER' || role === 'NON_TEACHING') && data.staff) {
+          const st = data.staff;
+          html += '<div class="grid grid-cols-1 sm:grid-cols-2 gap-4">'
+               +    kv('Employee ID',    st.employee_id)
+               +    kv('Staff Type',     st.staff_type)
+               +    kv('Gender',         st.gender)
+               +    kv('Designation',    st.designation_name)
+               +    kv('Department',     st.department_name)
+               +    kv('Contact Number', st.contact_number)
+               +    kv('WhatsApp Number', st.whatsapp_number)
+               +  '</div>';
+        } else if (data.member) {
+          const m = data.member;
+          html += '<div class="grid grid-cols-1 sm:grid-cols-2 gap-4">'
+               +    kv('Member Type',      m.member_type)
+               +    kv('Designation',      m.designation_name)
+               +    kv('Department',       m.department_name)
+               +    kv('Grievance Type',   m.grievance_type_name)
+               +    kv('Mobile Number',    m.mobile_number)
+               +    kv('WhatsApp Number',  m.whatsapp_number)
+               +  '</div>';
+        }
 
-      // Role badge
-      const roleBadge = document.getElementById('viewRoleBadge');
-      roleBadge.textContent = dash(data.role);
+        viewRoleSection.innerHTML = html;
+      }
 
-      // Status badge
-      const statusBadge = document.getElementById('viewStatusBadge');
-      const st = (data.status || '').toLowerCase();
-      statusBadge.className = 'inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider border ' +
-        (st === 'pending'   ? 'border-amber-200 bg-amber-50 text-amber-800'
-        : st === 'approved' ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
-        : st === 'rejected' ? 'border-rose-200 bg-rose-50 text-rose-800'
-                            : 'border-slate-200 bg-slate-50 text-slate-700');
-      statusBadge.textContent = dash(data.status);
+      window.openViewModal = function (data) {
+        if (!data) return;
 
-      // Avatar (role-aware)
-      const avatarDiv = document.getElementById('viewAvatar');
-      let avatarUrl = '';
-      if (data.role === 'STUDENT' && data.student)  avatarUrl = data.student.profile_image || '';
-      if (data.role === 'PARENT'  && data.parent)   avatarUrl = data.parent.profile_image  || '';
-      if ((data.role === 'TEACHER' || data.role === 'NON_TEACHING') && data.staff) avatarUrl = data.staff.profile_image || '';
-      if (data.member) avatarUrl = data.member.profile_image || '';
+        document.getElementById('viewName').textContent     = dash(data.name);
+        document.getElementById('viewEmail').textContent    = dash(data.email);
+        document.getElementById('viewUsername').textContent = dash(data.username);
+        document.getElementById('viewAddress').textContent  = dash(data.address);
+        document.getElementById('viewCreatedAt').textContent = formatDate(data.created_at);
 
-      avatarDiv.innerHTML = '';
-      if (avatarUrl) {
-        const img = document.createElement('img');
-        img.src = '../' + String(avatarUrl).replace(/^\/+/, '');
-        img.alt = data.name || 'User';
-        img.className = 'w-full h-full object-cover';
-        img.onerror = function () {
+        const roleBadge = document.getElementById('viewRoleBadge');
+        roleBadge.textContent = dash(data.role);
+
+        const statusBadge = document.getElementById('viewStatusBadge');
+        const st = (data.status || '').toLowerCase();
+        statusBadge.className = 'inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider border ' +
+          (st === 'pending'   ? 'border-amber-200 bg-amber-50 text-amber-800'
+          : st === 'approved' ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+          : st === 'rejected' ? 'border-rose-200 bg-rose-50 text-rose-800'
+                              : 'border-slate-200 bg-slate-50 text-slate-700');
+        statusBadge.textContent = dash(data.status);
+
+        const avatarDiv = document.getElementById('viewAvatar');
+        let avatarUrl = '';
+        if (data.role === 'STUDENT' && data.student)  avatarUrl = data.student.profile_image || '';
+        if (data.role === 'PARENT'  && data.parent)   avatarUrl = data.parent.profile_image  || '';
+        if ((data.role === 'TEACHER' || data.role === 'NON_TEACHING') && data.staff) avatarUrl = data.staff.profile_image || '';
+        if (data.member) avatarUrl = data.member.profile_image || '';
+
+        avatarDiv.innerHTML = '';
+        if (avatarUrl) {
+          const img = document.createElement('img');
+          img.src = '../' + String(avatarUrl).replace(/^\/+/, '');
+          img.alt = data.name || 'User';
+          img.className = 'w-full h-full object-cover';
+          img.onerror = function () {
+            avatarDiv.innerHTML = '<i data-lucide="user" class="w-8 h-8"></i>';
+            if (typeof lucide !== 'undefined') lucide.createIcons({ targets: [avatarDiv] });
+          };
+          avatarDiv.appendChild(img);
+        } else {
           avatarDiv.innerHTML = '<i data-lucide="user" class="w-8 h-8"></i>';
-          if (typeof lucide !== 'undefined') lucide.createIcons({ targets: [avatarDiv] });
-        };
-        avatarDiv.appendChild(img);
-      } else {
-        avatarDiv.innerHTML = '<i data-lucide="user" class="w-8 h-8"></i>';
-      }
+        }
 
-      renderRoleSection(data);
+        renderRoleSection(data);
 
-      viewDetailsModal.classList.remove('hidden');
-      document.body.classList.add('overflow-hidden');
-      if (typeof lucide !== 'undefined') lucide.createIcons();
-    }
+        viewDetailsModal.classList.remove('hidden');
+        document.body.classList.add('overflow-hidden');
+        if (typeof lucide !== 'undefined') lucide.createIcons();
+      };
 
-    function closeViewModal() {
-      viewDetailsModal.classList.add('hidden');
-      document.body.classList.remove('overflow-hidden');
-      viewRoleSection.innerHTML = '';
-    }
+      window.closeViewModal = function () {
+        viewDetailsModal.classList.add('hidden');
+        document.body.classList.remove('overflow-hidden');
+        viewRoleSection.innerHTML = '';
+      };
 
-    // Delegated handler for eye buttons
-    document.addEventListener('click', function (e) {
-      const btn = e.target.closest('[data-view-trigger="1"]');
-      if (!btn) return;
-      e.preventDefault();
-      const raw = btn.getAttribute('data-user');
-      if (!raw) return;
-      try { openViewModal(JSON.parse(raw)); } catch (err) { console.error(err); }
-    });
-
-    // ---- Approve Modal ----
-    const approveConfirmModal = document.getElementById('approveConfirmModal');
-    const approveConfirmPanel = document.getElementById('approveConfirmPanel');
-    const approveNameDisplay = document.getElementById('approveNameDisplay');
-    const confirmApproveBtn = document.getElementById('confirmApproveBtn');
-    let pendingApproveId = null;
-
-    function confirmApprove(userId, name) {
-      pendingApproveId = userId;
-      if (approveNameDisplay) approveNameDisplay.textContent = '"' + name + '"';
-      approveConfirmModal.classList.remove('hidden');
-      document.body.classList.add('overflow-hidden');
-      if (approveConfirmPanel) { approveConfirmPanel.classList.remove('animate-confirm-shake'); void approveConfirmPanel.offsetWidth; approveConfirmPanel.classList.add('animate-confirm-shake'); }
-      setTimeout(() => { if (confirmApproveBtn) confirmApproveBtn.focus(); }, 80);
-      if (typeof lucide !== 'undefined') lucide.createIcons();
-    }
-    function closeApproveModal() {
-      approveConfirmModal.classList.add('hidden');
-      document.body.classList.remove('overflow-hidden');
-      pendingApproveId = null;
-    }
-    if (confirmApproveBtn) confirmApproveBtn.addEventListener('click', function () {
-      if (pendingApproveId === null) return closeApproveModal();
-      const input = document.getElementById('approveUserId');
-      const form = document.getElementById('approveForm');
-      if (input && form) { input.value = String(pendingApproveId); form.submit(); }
-    });
-
-    // ---- Delete Modal ----
-    const deleteConfirmModal = document.getElementById('deleteConfirmModal');
-    const deleteConfirmPanel = document.getElementById('deleteConfirmPanel');
-    const deleteNameDisplay = document.getElementById('deleteNameDisplay');
-    const confirmDeleteBtn = document.getElementById('confirmDeleteBtn');
-    let pendingDeleteId = null;
-
-    function confirmDelete(userId, name) {
-      pendingDeleteId = userId;
-      if (deleteNameDisplay) deleteNameDisplay.textContent = '"' + name + '"';
-      deleteConfirmModal.classList.remove('hidden');
-      document.body.classList.add('overflow-hidden');
-      if (deleteConfirmPanel) { deleteConfirmPanel.classList.remove('animate-confirm-shake'); void deleteConfirmPanel.offsetWidth; deleteConfirmPanel.classList.add('animate-confirm-shake'); }
-      setTimeout(() => { if (confirmDeleteBtn) confirmDeleteBtn.focus(); }, 80);
-      if (typeof lucide !== 'undefined') lucide.createIcons();
-    }
-    function closeDeleteModal() {
-      deleteConfirmModal.classList.add('hidden');
-      document.body.classList.remove('overflow-hidden');
-      pendingDeleteId = null;
-    }
-    if (confirmDeleteBtn) confirmDeleteBtn.addEventListener('click', function () {
-      if (pendingDeleteId === null) return closeDeleteModal();
-      const input = document.getElementById('deleteUserId');
-      const form = document.getElementById('deleteForm');
-      if (input && form) { input.value = String(pendingDeleteId); form.submit(); }
-    });
-
-    // ---- Live Search ----
-    (function () {
-      const searchInput = document.getElementById('searchInput');
-      const tableBody = document.getElementById('registrationsTableBody');
-      if (!searchInput || !tableBody) return;
-      searchInput.addEventListener('input', function () {
-        const term = this.value.toLowerCase().trim();
-        tableBody.querySelectorAll('tr').forEach(function (row) {
-          row.style.display = (term === '' || row.textContent.toLowerCase().indexOf(term) !== -1) ? '' : 'none';
-        });
+      document.addEventListener('click', function (e) {
+        const btn = e.target.closest('[data-view-trigger="1"]');
+        if (!btn) return;
+        e.preventDefault();
+        const raw = btn.getAttribute('data-user');
+        if (!raw) return;
+        try { window.openViewModal(JSON.parse(raw)); } catch (err) { console.error(err); }
       });
-    })();
 
-    // ---- Escape closes any open modal ----
-    document.addEventListener('keydown', function (e) {
-      if (e.key !== 'Escape') return;
-      if (viewDetailsModal && !viewDetailsModal.classList.contains('hidden')) closeViewModal();
-      if (approveConfirmModal && !approveConfirmModal.classList.contains('hidden')) closeApproveModal();
-      if (deleteConfirmModal && !deleteConfirmModal.classList.contains('hidden')) closeDeleteModal();
+      // ---- Approve Checked (bulk) ----
+      window.approveChecked = function () {
+        const checked = document.querySelectorAll('.reg-checkbox:checked');
+        if (checked.length === 0) {
+          alert('Please select at least one registration to approve.');
+          return;
+        }
+        const form = document.getElementById('bulkApproveForm');
+        if (form) form.submit();
+      };
+
+      // ---- Approve Modal ----
+      const approveConfirmModal = document.getElementById('approveConfirmModal');
+      const approveConfirmPanel = document.getElementById('approveConfirmPanel');
+      const approveNameDisplay = document.getElementById('approveNameDisplay');
+      const confirmApproveBtn = document.getElementById('confirmApproveBtn');
+      let pendingApproveId = null;
+
+      window.confirmApprove = function (userId, name) {
+        pendingApproveId = userId;
+        if (approveNameDisplay) approveNameDisplay.textContent = '"' + name + '"';
+        approveConfirmModal.classList.remove('hidden');
+        document.body.classList.add('overflow-hidden');
+        if (approveConfirmPanel) { approveConfirmPanel.classList.remove('animate-confirm-shake'); void approveConfirmPanel.offsetWidth; approveConfirmPanel.classList.add('animate-confirm-shake'); }
+        setTimeout(() => { if (confirmApproveBtn) confirmApproveBtn.focus(); }, 80);
+        if (typeof lucide !== 'undefined') lucide.createIcons();
+      };
+      window.closeApproveModal = function () {
+        approveConfirmModal.classList.add('hidden');
+        document.body.classList.remove('overflow-hidden');
+        pendingApproveId = null;
+      };
+      if (confirmApproveBtn) confirmApproveBtn.addEventListener('click', function () {
+        if (pendingApproveId === null) return window.closeApproveModal();
+        const input = document.getElementById('approveUserId');
+        const form = document.getElementById('approveForm');
+        if (input && form) { input.value = String(pendingApproveId); form.submit(); }
+      });
+
+      // ---- Delete Modal ----
+      const deleteConfirmModal = document.getElementById('deleteConfirmModal');
+      const deleteConfirmPanel = document.getElementById('deleteConfirmPanel');
+      const deleteNameDisplay = document.getElementById('deleteNameDisplay');
+      const confirmDeleteBtn = document.getElementById('confirmDeleteBtn');
+      let pendingDeleteId = null;
+
+      window.confirmDelete = function (userId, name) {
+        pendingDeleteId = userId;
+        if (deleteNameDisplay) deleteNameDisplay.textContent = '"' + name + '"';
+        deleteConfirmModal.classList.remove('hidden');
+        document.body.classList.add('overflow-hidden');
+        if (deleteConfirmPanel) { deleteConfirmPanel.classList.remove('animate-confirm-shake'); void deleteConfirmPanel.offsetWidth; deleteConfirmPanel.classList.add('animate-confirm-shake'); }
+        setTimeout(() => { if (confirmDeleteBtn) confirmDeleteBtn.focus(); }, 80);
+        if (typeof lucide !== 'undefined') lucide.createIcons();
+      };
+      window.closeDeleteModal = function () {
+        deleteConfirmModal.classList.add('hidden');
+        document.body.classList.remove('overflow-hidden');
+        pendingDeleteId = null;
+      };
+      if (confirmDeleteBtn) confirmDeleteBtn.addEventListener('click', function () {
+        if (pendingDeleteId === null) return window.closeDeleteModal();
+        const input = document.getElementById('deleteUserId');
+        const form = document.getElementById('deleteForm');
+        if (input && form) { input.value = String(pendingDeleteId); form.submit(); }
+      });
+
+      // ---- Logout Confirmation Modal ----
+      (function () {
+        const logoutConfirmModal = document.getElementById('logoutConfirmModal');
+        const logoutConfirmPanel = document.getElementById('logoutConfirmPanel');
+        const confirmLogoutBtn   = document.getElementById('confirmLogoutBtn');
+        const LOGOUT_URL         = '../logout.php?role=admin';
+
+        if (!logoutConfirmModal) return;
+
+        window.openLogoutModal = function () {
+          logoutConfirmModal.classList.remove('hidden');
+          document.body.classList.add('overflow-hidden');
+          if (logoutConfirmPanel) {
+            logoutConfirmPanel.classList.remove('animate-confirm-shake');
+            void logoutConfirmPanel.offsetWidth;
+            logoutConfirmPanel.classList.add('animate-confirm-shake');
+          }
+          setTimeout(function () { if (confirmLogoutBtn) confirmLogoutBtn.focus(); }, 80);
+          if (typeof lucide !== 'undefined') lucide.createIcons();
+        };
+        window.closeLogoutModal = function () {
+          logoutConfirmModal.classList.add('hidden');
+          document.body.classList.remove('overflow-hidden');
+        };
+
+        [document.getElementById('sidebarLogoutBtn'), document.getElementById('dropdownLogoutBtn')].forEach(function (btn) {
+          if (!btn) return;
+          btn.addEventListener('click', function (e) {
+            e.preventDefault();
+            e.stopPropagation();
+            window.openLogoutModal();
+          });
+        });
+
+        if (confirmLogoutBtn) {
+          confirmLogoutBtn.addEventListener('click', function () {
+            confirmLogoutBtn.classList.add('opacity-50', 'pointer-events-none');
+            window.location.href = LOGOUT_URL;
+          });
+        }
+      })();
+
+      // ---- Live Search ----
+      (function () {
+        const searchInput = document.getElementById('searchInput');
+        const tableBody = document.getElementById('registrationsTableBody');
+        if (!searchInput || !tableBody) return;
+        searchInput.addEventListener('input', function () {
+          const term = this.value.toLowerCase().trim();
+          tableBody.querySelectorAll('tr').forEach(function (row) {
+            row.style.display = (term === '' || row.textContent.toLowerCase().indexOf(term) !== -1) ? '' : 'none';
+          });
+        });
+      })();
+
+      // ---- Escape closes any open modal ----
+      document.addEventListener('keydown', function (e) {
+        if (e.key !== 'Escape') return;
+        if (viewDetailsModal && !viewDetailsModal.classList.contains('hidden')) window.closeViewModal();
+        if (approveConfirmModal && !approveConfirmModal.classList.contains('hidden')) window.closeApproveModal();
+        if (deleteConfirmModal && !deleteConfirmModal.classList.contains('hidden')) window.closeDeleteModal();
+        if (logoutConfirmModal && !logoutConfirmModal.classList.contains('hidden')) window.closeLogoutModal();
+      });
+
     });
   </script>
 

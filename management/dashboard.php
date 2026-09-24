@@ -187,13 +187,18 @@ function e(?string $v): string
               '40%':      { transform: 'translateX(6px)' },
               '60%':      { transform: 'translateX(-4px)' },
               '80%':      { transform: 'translateX(4px)' }
+            },
+            submenuFade: {
+              '0%':   { opacity: '0', maxHeight: '0' },
+              '100%': { opacity: '1', maxHeight: '500px' }
             }
           },
           animation: {
             'fade-in-up': 'fadeInUp 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards',
             'dropdown':   'dropdownFade 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards',
             'modal-in':   'modalFadeIn 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards',
-            'confirm-shake': 'confirmShake 0.5s cubic-bezier(0.16, 1, 0.3, 1)'
+            'confirm-shake': 'confirmShake 0.5s cubic-bezier(0.16, 1, 0.3, 1)',
+            'submenu':    'submenuFade 0.25s ease-out forwards'
           }
         }
       }
@@ -207,7 +212,7 @@ function e(?string $v): string
 
   <div class="flex min-h-screen flex-1">
 
-    <!-- SIDEBAR (collapsible, matches parent/dashboard.php) -->
+    <!-- SIDEBAR (collapsible) -->
     <aside id="managementSidebar"
            class="w-20 bg-gradient-to-b from-[#4A154B] via-[#5A1B5C] to-[#006837]
                   flex flex-col py-4 shadow-2xl fixed inset-y-0 left-0 z-40
@@ -215,18 +220,21 @@ function e(?string $v): string
 
       <button id="sidebarToggle"
               class="text-white/80 hover:text-white mb-8 p-2 rounded-lg hover:bg-white/10 transition-colors
-                     flex items-center justify-center w-14 mx-auto"
+                     flex items-center justify-center w-14 mx-auto flex-shrink-0"
               aria-label="Toggle sidebar">
         <i data-lucide="menu" class="w-6 h-6 flex-shrink-0"></i>
       </button>
 
-      <nav class="flex flex-col space-y-2 flex-1 w-full px-3">
+      <!-- Scrollable nav -->
+      <nav id="managementNav"
+           class="flex flex-col space-y-2 flex-1 w-full px-3 pt-2 overflow-y-auto overflow-x-hidden
+                  [scrollbar-width:thin] [scrollbar-color:rgba(255,255,255,0.2)_transparent]">
 
         <!-- Dashboard -->
         <a href="dashboard.php"
            class="group relative w-full h-12 rounded-xl bg-white/20 backdrop-blur-sm
                   flex items-center text-white shadow-lg ring-2 ring-white/30
-                  transition-all hover:bg-white/30 px-3">
+                  transition-all hover:bg-white/30 px-3 flex-shrink-0">
           <i data-lucide="home" class="w-6 h-6 flex-shrink-0"></i>
           <span class="sidebar-label ml-4 text-sm font-semibold whitespace-nowrap
                        opacity-0 w-0 overflow-hidden transition-all duration-200">
@@ -238,10 +246,67 @@ function e(?string $v): string
           </span>
         </a>
 
+        <!-- Grievance (direct link) -->
+        <a href="grievances.php"
+           class="group relative w-full h-12 rounded-xl bg-white/10 hover:bg-white/20
+                  flex items-center text-white transition-all px-3 flex-shrink-0">
+          <i data-lucide="clipboard-list" class="w-6 h-6 flex-shrink-0"></i>
+          <span class="sidebar-label ml-4 text-sm font-semibold whitespace-nowrap
+                       opacity-0 w-0 overflow-hidden transition-all duration-200">
+            Grievance
+          </span>
+          <span class="sidebar-tooltip absolute left-full ml-3 hidden group-hover:block whitespace-nowrap
+                       bg-[#4A154B] text-white text-xs px-3 py-1.5 rounded-lg shadow-lg z-50">
+            Grievance
+          </span>
+        </a>
+
+        <!-- Grievance Reports (dropdown group) -->
+        <div class="sidebar-group flex-shrink-0" data-section="reports">
+          <!-- Parent button — toggles submenu only when sidebar expanded;
+               navigates to landing page when collapsed -->
+          <button type="button"
+                  id="reportsToggle"
+                  data-submenu-toggle="reports"
+                  data-landing-href="grievance_reports.php"
+                  class="group relative w-full h-12 rounded-xl bg-white/10 hover:bg-white/20
+                         flex items-center text-white transition-all px-3">
+            <i data-lucide="bar-chart-3" class="w-6 h-6 flex-shrink-0"></i>
+            <span class="sidebar-label ml-4 text-sm font-semibold whitespace-nowrap
+                         opacity-0 w-0 overflow-hidden transition-all duration-200">
+              Grievance Reports
+            </span>
+            <i data-lucide="chevron-down"
+               class="sidebar-label submenu-chevron ml-auto w-4 h-4 flex-shrink-0
+                      transition-transform duration-300 opacity-0 w-0 overflow-hidden"></i>
+            <span class="sidebar-tooltip absolute left-full ml-3 hidden group-hover:block whitespace-nowrap
+                         bg-[#4A154B] text-white text-xs px-3 py-1.5 rounded-lg shadow-lg z-50">
+              Grievance Reports
+            </span>
+          </button>
+
+          <!-- Submenu -->
+          <div id="submenu-reports"
+               class="submenu hidden ml-2 mt-1 space-y-1 pl-3 border-l border-white/20">
+            <a href="complaint_report.php"
+               class="group flex items-center gap-2 px-2 py-2 rounded-lg text-white/80 hover:text-white
+                      hover:bg-white/10 transition-all text-xs">
+              <i data-lucide="file-bar-chart" class="w-4 h-4 flex-shrink-0 text-white/70 group-hover:text-white"></i>
+              <span class="font-medium whitespace-nowrap">Complaint Report</span>
+            </a>
+            <a href="cell_members_report.php"
+               class="group flex items-center gap-2 px-2 py-2 rounded-lg text-white/80 hover:text-white
+                      hover:bg-white/10 transition-all text-xs">
+              <i data-lucide="users-2" class="w-4 h-4 flex-shrink-0 text-white/70 group-hover:text-white"></i>
+              <span class="font-medium whitespace-nowrap">Cell Member Report</span>
+            </a>
+          </div>
+        </div>
+
         <!-- My Profile -->
         <a href="profile.php"
            class="group relative w-full h-12 rounded-xl bg-white/10 hover:bg-white/20
-                  flex items-center text-white transition-all px-3">
+                  flex items-center text-white transition-all px-3 flex-shrink-0">
           <i data-lucide="user" class="w-6 h-6 flex-shrink-0"></i>
           <span class="sidebar-label ml-4 text-sm font-semibold whitespace-nowrap
                        opacity-0 w-0 overflow-hidden transition-all duration-200">
@@ -256,7 +321,7 @@ function e(?string $v): string
         <!-- Change Password -->
         <a href="change_password.php"
            class="group relative w-full h-12 rounded-xl bg-white/10 hover:bg-white/20
-                  flex items-center text-white transition-all px-3">
+                  flex items-center text-white transition-all px-3 flex-shrink-0">
           <i data-lucide="key" class="w-6 h-6 flex-shrink-0"></i>
           <span class="sidebar-label ml-4 text-sm font-semibold whitespace-nowrap
                        opacity-0 w-0 overflow-hidden transition-all duration-200">
@@ -276,7 +341,7 @@ function e(?string $v): string
          id="sidebarLogoutBtn"
          class="group relative w-full h-12 rounded-xl bg-white/10 hover:bg-red-500/40
                 flex items-center text-white transition-all
-                mx-3 px-3"
+                mx-3 px-3 flex-shrink-0"
          style="width: calc(100% - 1.5rem);"
          title="Logout">
         <i data-lucide="log-out" class="w-6 h-6 flex-shrink-0"></i>
@@ -552,6 +617,8 @@ function e(?string $v): string
 
       const labels   = sidebar.querySelectorAll('.sidebar-label');
       const tooltips = sidebar.querySelectorAll('.sidebar-tooltip');
+      const chevrons = sidebar.querySelectorAll('.submenu-chevron');
+      const submenus = sidebar.querySelectorAll('.submenu');
 
       let expanded = false;
 
@@ -580,11 +647,67 @@ function e(?string $v): string
             el.classList.remove('opacity-100', 'w-auto');
           });
           tooltips.forEach(function (el) { el.classList.remove('hidden'); });
+
+          // Auto-collapse any open submenus when the sidebar is collapsed
+          submenus.forEach(function (sm) { sm.classList.add('hidden'); });
+          chevrons.forEach(function (ch) { ch.classList.remove('rotate-180'); });
         }
 
         setTimeout(function () {
           if (typeof lucide !== 'undefined') lucide.createIcons();
         }, 250);
+      });
+    })();
+
+    // ============================================================
+    // SUBMENU TOGGLE (Grievance Reports)
+    //   - Collapsed sidebar → navigate to landing page
+    //   - Expanded sidebar  → toggle submenu
+    // ============================================================
+    (function () {
+      const toggles = document.querySelectorAll('[data-submenu-toggle]');
+      if (!toggles.length) return;
+
+      toggles.forEach(function (btn) {
+        btn.addEventListener('click', function (e) {
+          const sidebarEl = document.getElementById('managementSidebar');
+          const isCollapsed = sidebarEl && sidebarEl.classList.contains('w-20');
+
+          // COLLAPSED → navigate to landing page
+          if (isCollapsed) {
+            const href = btn.getAttribute('data-landing-href');
+            if (href) window.location.href = href;
+            return;
+          }
+
+          // EXPANDED → toggle submenu
+          e.preventDefault();
+          e.stopPropagation();
+
+          const sectionId = btn.getAttribute('data-submenu-toggle');
+          const submenu   = document.getElementById('submenu-' + sectionId);
+          const chevron   = btn.querySelector('.submenu-chevron');
+
+          if (!submenu) return;
+
+          const isOpen = !submenu.classList.contains('hidden');
+
+          // Accordion: close other submenus
+          document.querySelectorAll('.submenu').forEach(function (sm) {
+            if (sm !== submenu) sm.classList.add('hidden');
+          });
+          document.querySelectorAll('.submenu-chevron').forEach(function (ch) {
+            if (ch !== chevron) ch.classList.remove('rotate-180');
+          });
+
+          if (isOpen) {
+            submenu.classList.add('hidden');
+            if (chevron) chevron.classList.remove('rotate-180');
+          } else {
+            submenu.classList.remove('hidden');
+            if (chevron) chevron.classList.add('rotate-180');
+          }
+        });
       });
     })();
 

@@ -2,7 +2,7 @@
 /**
  * admin/summary_details.php
  * ---------------------------------------------------------------------------
- * Admin — Summary Details (Grievance Listing + Create + Bulk Upload + View + Edit + Delete)
+ * Admin — Summary Details (Grievance Listing + Create + Bulk Upload + View + Delete)
  * Rajagiri College Grievance Redressal Portal
  * ---------------------------------------------------------------------------
  */
@@ -89,6 +89,19 @@ function roleLabel(string $role): string
         'ADMIN'        => 'ADMIN',
     ];
     return $map[$role] ?? $role;
+}
+
+/**
+ * Resolve the public URL for an attachment stored as a relative path.
+ */
+function resolveAttachmentUrl(?string $path): ?string
+{
+    if (empty($path)) return null;
+    $rel = ltrim((string) $path, '/');
+    if (file_exists(__DIR__ . '/../' . $rel)) {
+        return '../' . $rel;
+    }
+    return null;
 }
 
 function generateGrievanceNumber(mysqli $conn): string
@@ -442,45 +455,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $conn instanceof mysqli) {
         }
     }
 
-    // EDIT
-    if ($action === 'edit_summary') {
-        $grievanceId   = (int) ($_POST['grievance_id']    ?? 0);
-        $subject       = trim((string) ($_POST['subject']       ?? ''));
-        $description   = trim((string) ($_POST['description']   ?? ''));
-        $status        = trim((string) ($_POST['status']        ?? 'Pending'));
-        $replyDetails  = trim((string) ($_POST['reply_details'] ?? ''));
-
-        $validStatuses = ['Pending', 'In Progress', 'Disposed', 'Closed', 'Reopened'];
-        if (!in_array($status, $validStatuses, true)) $status = 'Pending';
-
-        if ($grievanceId <= 0) {
-            $flashError = 'Invalid grievance.';
-        } elseif ($subject === '' || $description === '') {
-            $flashError = 'Subject and Description are required.';
-        } else {
-            try {
-                $stmt = $conn->prepare("UPDATE grievances
-                                        SET subject = ?, description = ?, status = ?, reply_details = ?
-                                        WHERE id = ?");
-                if (!$stmt) throw new Exception('Failed to prepare update.');
-                $stmt->bind_param('ssssi', $subject, $description, $status, $replyDetails, $grievanceId);
-                $stmt->execute();
-                $stmt->close();
-                $flashSuccess = 'Grievance updated successfully.';
-            } catch (Throwable $ex) {
-                error_log('[Edit Summary] ' . $ex->getMessage());
-                $flashError = 'A system error occurred while updating the record.';
-            }
-        }
-
-        if ($flashSuccess !== '' || $flashError !== '') {
-            $_SESSION['flash_success'] = $flashSuccess;
-            $_SESSION['flash_error']   = $flashError;
-            header('Location: summary_details.php');
-            exit;
-        }
-    }
-
     // DELETE
     if ($action === 'delete_summary') {
         $grievanceId = (int) ($_POST['grievance_id'] ?? 0);
@@ -726,6 +700,8 @@ if ($conn instanceof mysqli) {
                             g.status,
                             g.reply_details,
                             g.feedback_details,
+                            g.attachment_path,
+                            g.reply_attachment_path,
                             g.created_at,
                             g.updated_at,
                             gt.type_name,
@@ -762,6 +738,63 @@ if ($conn instanceof mysqli) {
         }
     } catch (Throwable $ex) {
         error_log('[Fetch Summary Details] ' . $ex->getMessage());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FETCH GRIEVANCE ACTIONS FOR ALL VISIBLE ROWS
+// ---------------------------------------------------------------------------
+$actionsByGrievance = [];
+
+if ($conn instanceof mysqli && !empty($rows)) {
+    try {
+        $grievanceIds = array_map(static fn($r) => (int) $r['id'], $rows);
+        $grievanceIds = array_filter($grievanceIds, static fn($v) => $v > 0);
+
+        if (!empty($grievanceIds)) {
+            $placeholders = implode(',', array_fill(0, count($grievanceIds), '?'));
+            $types        = str_repeat('i', count($grievanceIds));
+
+            $sql = "SELECT ga.id,
+                           ga.grievance_id,
+                           ga.action_date,
+                           ga.summary,
+                           ga.action_taken,
+                           ga.created_at,
+                           ga.attendee_id,
+                           COALESCE(cmm.name, u2.username, '—') AS attendee_name,
+                           COALESCE(cmm.member_type, '')        AS attendee_type
+                    FROM grievance_actions ga
+                    LEFT JOIN cell_members cmm ON ga.attendee_id = cmm.id
+                    LEFT JOIN users u2         ON cmm.user_id = u2.id
+                    WHERE ga.grievance_id IN ($placeholders)
+                    ORDER BY ga.grievance_id ASC, ga.action_date ASC, ga.id ASC";
+
+            $stmt = $conn->prepare($sql);
+            if ($stmt) {
+                $stmt->bind_param($types, ...$grievanceIds);
+                $stmt->execute();
+                $res = $stmt->get_result();
+                while ($row = $res->fetch_assoc()) {
+                    $gid = (int) $row['grievance_id'];
+                    if (!isset($actionsByGrievance[$gid])) $actionsByGrievance[$gid] = [];
+                    $gAdate = (string) ($row['action_date'] ?? '');
+                    if ($gAdate !== '' && strtotime($gAdate) !== false) {
+                        $gAdate = date('Y-m-d', strtotime($gAdate));
+                    }
+                    $actionsByGrievance[$gid][] = [
+                        'action_date'   => $gAdate,
+                        'summary'       => (string) ($row['summary']       ?? ''),
+                        'action_taken'  => (string) ($row['action_taken']  ?? ''),
+                        'attendee_name' => (string) ($row['attendee_name'] ?? '—'),
+                        'attendee_type' => (string) ($row['attendee_type'] ?? ''),
+                    ];
+                }
+                $stmt->close();
+            }
+        }
+    } catch (Throwable $ex) {
+        error_log('[Fetch Grievance Actions] ' . $ex->getMessage());
     }
 }
 ?>
@@ -809,20 +842,14 @@ if ($conn instanceof mysqli) {
 
   <link rel="stylesheet" href="../assets/css/index.css" />
 
-  <!-- ============================================================
-       PRINT STYLES — clean isolated print block
-       ============================================================ -->
   <style>
-    /* Hide print block on screen */
     #print-area { display: none; }
 
     @media print {
-      /* Fully remove on-screen UI */
       body > .screen-only,
       body > .screen-only * { display: none !important; }
       .no-print { display: none !important; }
 
-      /* Page reset */
       html, body {
         margin: 0 !important;
         padding: 0 !important;
@@ -832,7 +859,6 @@ if ($conn instanceof mysqli) {
         print-color-adjust: exact;
       }
 
-      /* Reveal print block */
       #print-area {
         display: block !important;
         position: static !important;
@@ -854,9 +880,6 @@ if ($conn instanceof mysqli) {
 
 <body class="min-h-screen bg-slate-50 text-slate-800 antialiased flex flex-col">
 
-  <!-- ============================================================
-       SCREEN-ONLY WRAPPER
-       ============================================================ -->
   <div class="screen-only flex min-h-screen flex-1">
 
     <!-- SIDEBAR -->
@@ -1099,6 +1122,9 @@ if ($conn instanceof mysqli) {
                         $gRole      = (string) ($r['complainant_role']    ?? '');
                         $gStatus    = (string) ($r['status']              ?? 'Pending');
 
+                        $gAttach    = resolveAttachmentUrl($r['attachment_path'] ?? null);
+                        $gReplyAtt  = resolveAttachmentUrl($r['reply_attachment_path'] ?? null);
+
                         $formattedDate    = '—';
                         $formattedUpdated = '—';
                         if ($gDate !== '' && strtotime($gDate) !== false) $formattedDate    = date('Y-m-d', strtotime($gDate));
@@ -1106,6 +1132,8 @@ if ($conn instanceof mysqli) {
 
                         $statusCls   = statusBadgeClass($gStatus);
                         $globalIndex = $offset + $index + 1;
+
+                        $actionsList = $actionsByGrievance[$gId] ?? [];
                       ?>
                       <tr class="hover:bg-slate-50/80 transition-colors group">
                         <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-900"><?= $globalIndex ?></td>
@@ -1119,38 +1147,26 @@ if ($conn instanceof mysqli) {
 
                             <button type="button" title="View grievance"
                                     onclick='openViewModal(<?= json_encode([
-                                        "grievance_number" => $gNumber,
-                                        "name"             => $gName,
-                                        "role"             => roleLabel($gRole),
-                                        "class_department" => $gClass,
-                                        "grievance_type"   => $gType,
-                                        "subject"          => $gSubject,
-                                        "description"      => $gDesc,
-                                        "status"           => $gStatus,
-                                        "posted_date"      => $formattedDate,
-                                        "reply_date"       => $formattedUpdated,
-                                        "reply_details"    => $gReply,
-                                        "feedback_details" => $gFeedback,
+                                        "grievance_number"      => $gNumber,
+                                        "name"                  => $gName,
+                                        "role"                  => roleLabel($gRole),
+                                        "class_department"      => $gClass,
+                                        "grievance_type"        => $gType,
+                                        "subject"               => $gSubject,
+                                        "description"           => $gDesc,
+                                        "status"                => $gStatus,
+                                        "posted_date"           => $formattedDate,
+                                        "reply_date"            => $formattedUpdated,
+                                        "reply_details"         => $gReply,
+                                        "feedback_details"      => $gFeedback,
+                                        "attachment_url"        => $gAttach,
+                                        "reply_attachment_url"  => $gReplyAtt,
+                                        "actions"               => $actionsList,
                                     ], JSON_HEX_APOS | JSON_HEX_QUOT) ?>)'
                                     class="inline-flex w-9 h-9 rounded-full bg-purple-50 hover:bg-[#4A154B]
                                            items-center justify-center text-[#4A154B] hover:text-white
                                            transition-all duration-200 hover:scale-110">
                               <i data-lucide="eye" class="w-4 h-4"></i>
-                            </button>
-
-                            <button type="button" title="Edit grievance"
-                                    onclick='openEditModal(<?= json_encode([
-                                        "id"           => $gId,
-                                        "number"       => $gNumber,
-                                        "subject"      => $gSubject,
-                                        "description"  => $gDesc,
-                                        "status"       => $gStatus,
-                                        "reply_details"=> $gReply,
-                                    ], JSON_HEX_APOS | JSON_HEX_QUOT) ?>)'
-                                    class="inline-flex w-9 h-9 rounded-full bg-purple-50 hover:bg-[#4A154B]
-                                           items-center justify-center text-[#4A154B] hover:text-white
-                                           transition-all duration-200 hover:scale-110">
-                              <i data-lucide="pencil" class="w-4 h-4"></i>
                             </button>
 
                             <button type="button" title="Delete grievance"
@@ -1230,13 +1246,11 @@ if ($conn instanceof mysqli) {
       </footer>
     </div>
   </div>
-  <!-- END .screen-only -->
 
   <!-- ============================================================
-       PRINT-ONLY AREA — inline styles only
+       PRINT-ONLY AREA
        ============================================================ -->
   <div id="print-area">
-    <!-- Header -->
     <table style="width:100%;border-collapse:collapse;margin-bottom:8px;">
       <tr>
         <td style="vertical-align:middle;width:60%;">
@@ -1262,10 +1276,8 @@ if ($conn instanceof mysqli) {
       </tr>
     </table>
 
-    <!-- Title -->
     <div style="font-size:18px;font-weight:bold;color:#111;margin:0 0 8px 0;">Summary Details</div>
 
-    <!-- Meta line -->
     <table style="width:100%;border-collapse:collapse;font-size:10.5px;color:#333;margin-bottom:10px;">
       <tr>
         <td style="padding-bottom:6px;">
@@ -1281,7 +1293,6 @@ if ($conn instanceof mysqli) {
       </tr>
     </table>
 
-    <!-- Table -->
     <table style="width:100%;border-collapse:collapse;table-layout:fixed;font-size:9px;color:#000;">
       <thead>
         <tr>
@@ -1324,7 +1335,6 @@ if ($conn instanceof mysqli) {
       </tbody>
     </table>
 
-    <!-- Footer -->
     <div style="margin-top:10px;font-size:10px;color:#333;">
       <strong>Total records:</strong> <?= $totalRows ?>
       &nbsp;&nbsp;|&nbsp;&nbsp;
@@ -1403,14 +1413,35 @@ if ($conn instanceof mysqli) {
           <p id="viewDescription" class="text-sm text-slate-700 leading-relaxed whitespace-pre-wrap break-words">—</p>
         </div>
 
+        <!-- Complaint Attachment -->
+        <div id="viewAttachmentWrapper">
+          <p class="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-2">Complaint Attachment</p>
+          <div id="viewAttachmentContent" class="text-sm text-slate-700">—</div>
+        </div>
+
         <div>
           <p class="text-[10px] font-bold uppercase tracking-wider text-slate-400">Reply / Action Taken</p>
           <p id="viewReplyDetails" class="text-sm text-slate-700 leading-relaxed whitespace-pre-wrap break-words">—</p>
         </div>
 
+        <!-- Reply Attachment -->
+        <div id="viewReplyAttachmentWrapper">
+          <p class="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-2">Reply Attachment</p>
+          <div id="viewReplyAttachmentContent" class="text-sm text-slate-700">—</div>
+        </div>
+
         <div>
           <p class="text-[10px] font-bold uppercase tracking-wider text-slate-400">Feedback Details</p>
           <p id="viewFeedbackDetails" class="text-sm text-slate-700 leading-relaxed whitespace-pre-wrap break-words">—</p>
+        </div>
+
+        <!-- Grievance Actions timeline -->
+        <div id="viewActionsWrapper">
+          <div class="flex items-center justify-between mb-2">
+            <p class="text-[10px] font-bold uppercase tracking-wider text-slate-400">Grievance Actions</p>
+            <span id="viewActionsCount" class="text-[10px] font-bold text-[#8B1E7E] bg-purple-50 border border-purple-100 px-2 py-0.5 rounded-full">0</span>
+          </div>
+          <div id="viewActionsList" class="space-y-3">—</div>
         </div>
 
       </div>
@@ -1423,90 +1454,6 @@ if ($conn instanceof mysqli) {
           Close
         </button>
       </div>
-    </div>
-  </div>
-
-  <!-- ============================================================ -->
-  <!-- EDIT MODAL -->
-  <!-- ============================================================ -->
-  <div id="editModal" class="hidden fixed inset-0 z-[66] flex items-center justify-center p-4">
-    <div class="absolute inset-0 bg-black/50 backdrop-blur-sm" onclick="closeEditModal()"></div>
-
-    <div class="relative w-full max-w-2xl bg-white rounded-2xl shadow-2xl animate-modal-in overflow-hidden">
-      <div class="h-1.5 w-full bg-gradient-to-r from-[#6A2C8A] via-[#8B1E7E] to-[#C43A7A]"></div>
-
-      <div class="flex items-center justify-between px-6 py-4 border-b border-slate-100">
-        <div class="flex items-center gap-3">
-          <div class="w-9 h-9 rounded-lg bg-purple-50 flex items-center justify-center">
-            <i data-lucide="pencil" class="w-5 h-5 text-[#8B1E7E]"></i>
-          </div>
-          <h3 class="text-lg font-bold text-slate-800">Edit Grievance</h3>
-        </div>
-        <button type="button" onclick="closeEditModal()"
-                class="w-8 h-8 rounded-lg hover:bg-slate-100 flex items-center justify-center text-slate-500 transition-colors">
-          <i data-lucide="x" class="w-5 h-5"></i>
-        </button>
-      </div>
-
-      <form id="editForm" method="POST" action="summary_details.php" class="p-6 space-y-5 max-h-[75vh] overflow-y-auto">
-        <input type="hidden" name="action" value="edit_summary" />
-        <input type="hidden" name="grievance_id" id="editGrievanceId" value="" />
-
-        <div class="space-y-2">
-          <label class="block text-sm font-semibold text-slate-700">Grievance Number</label>
-          <input type="text" id="editNumber" readonly
-                 class="w-full px-4 py-3 border-2 border-slate-100 rounded-xl bg-slate-50 text-slate-500 font-medium cursor-not-allowed" />
-        </div>
-
-        <div class="space-y-2">
-          <label for="edit_subject" class="block text-sm font-semibold text-slate-700">Subject <span class="text-[#E5097F]">*</span></label>
-          <input type="text" name="subject" id="edit_subject" required placeholder="Enter subject"
-                 class="w-full px-4 py-3 border-2 border-slate-200 rounded-xl bg-white text-slate-800 font-medium placeholder-slate-400
-                        focus:outline-none focus:border-[#4A154B] focus:ring-4 focus:ring-[#4A154B]/10
-                        hover:border-[#4A154B]/40 transition-all" />
-        </div>
-
-        <div class="space-y-2">
-          <label for="edit_description" class="block text-sm font-semibold text-slate-700">Description <span class="text-[#E5097F]">*</span></label>
-          <textarea name="description" id="edit_description" required rows="4" placeholder="Enter description"
-                    class="w-full px-4 py-3 border-2 border-slate-200 rounded-xl bg-white text-slate-800 font-medium placeholder-slate-400 resize-none
-                           focus:outline-none focus:border-[#4A154B] focus:ring-4 focus:ring-[#4A154B]/10
-                           hover:border-[#4A154B]/40 transition-all"></textarea>
-        </div>
-
-        <div class="space-y-2">
-          <label for="edit_status" class="block text-sm font-semibold text-slate-700">Status <span class="text-[#E5097F]">*</span></label>
-          <select name="status" id="edit_status" required
-                  class="w-full px-4 py-3 border-2 border-slate-200 rounded-xl appearance-none bg-white text-slate-800 font-medium
-                         focus:outline-none focus:border-[#4A154B] focus:ring-4 focus:ring-[#4A154B]/10
-                         hover:border-[#4A154B]/40 transition-all">
-            <option value="Pending">Pending</option>
-            <option value="In Progress">In Progress</option>
-            <option value="Disposed">Disposed</option>
-            <option value="Closed">Closed</option>
-            <option value="Reopened">Reopened</option>
-          </select>
-        </div>
-
-        <div class="space-y-2">
-          <label for="edit_reply_details" class="block text-sm font-semibold text-slate-700">Reply / Action Taken</label>
-          <textarea name="reply_details" id="edit_reply_details" rows="3" placeholder="Enter reply or action taken"
-                    class="w-full px-4 py-3 border-2 border-slate-200 rounded-xl bg-white text-slate-800 font-medium placeholder-slate-400 resize-none
-                           focus:outline-none focus:border-[#4A154B] focus:ring-4 focus:ring-[#4A154B]/10
-                           hover:border-[#4A154B]/40 transition-all"></textarea>
-        </div>
-
-        <div class="flex justify-center pt-3 gap-3">
-          <button type="button" onclick="closeEditModal()"
-                  class="px-6 py-3 rounded-xl font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-200 transition-all duration-200 active:scale-95">
-            Cancel
-          </button>
-          <button type="submit"
-                  class="px-8 py-3 rounded-xl bg-gradient-to-r from-[#6A2C8A] via-[#8B1E7E] to-[#C43A7A] hover:from-[#5A1C7A] hover:via-[#7B0E6E] hover:to-[#B42A6A] text-white font-bold shadow-lg shadow-purple-500/30 hover:shadow-purple-500/50 transition-all duration-300 hover:-translate-y-0.5 active:scale-95">
-            Save Changes
-          </button>
-        </div>
-      </form>
     </div>
   </div>
 
@@ -1865,27 +1812,183 @@ if ($conn instanceof mysqli) {
       });
     })();
 
-    // Modals
-    const viewModal = document.getElementById('viewModal');
+    // --------------------------------------------------------------------
+    // Helpers
+    // --------------------------------------------------------------------
+    function escapeHtml(str) {
+      const div = document.createElement('div');
+      div.textContent = (str === undefined || str === null) ? '' : String(str);
+      return div.innerHTML;
+    }
+
+    function setTextOrDash(id, value) {
+      const el = document.getElementById(id);
+      if (!el) return;
+      const v = (value === undefined || value === null) ? '' : String(value).trim();
+      el.textContent = v !== '' ? v : '—';
+    }
+
+    // --------------------------------------------------------------------
+    // Attachment renderer — View + Download buttons
+    // --------------------------------------------------------------------
+    function renderAttachment(containerId, url) {
+      const container = document.getElementById(containerId);
+      if (!container) return;
+
+      if (!url) {
+        container.innerHTML = '<span class="text-slate-400 italic text-sm">No attachment</span>';
+        return;
+      }
+
+      const safeUrl  = String(url);
+      const fileName = (safeUrl.split('/').pop() || 'attachment').split('?')[0];
+      const isImage  = /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(safeUrl);
+
+      // Lucide icons as inline SVG (so we don't depend on lucide replacing them later)
+      const viewIcon =
+        '<svg xmlns="http://www.w3.org/2000/svg" class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+          '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>' +
+          '<circle cx="12" cy="12" r="3"></circle>' +
+        '</svg>';
+
+      const downloadIcon =
+        '<svg xmlns="http://www.w3.org/2000/svg" class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+          '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>' +
+          '<polyline points="7 10 12 15 17 10"></polyline>' +
+          '<line x1="12" y1="15" x2="12" y2="3"></line>' +
+        '</svg>';
+
+      const fileIcon =
+        '<svg xmlns="http://www.w3.org/2000/svg" class="w-8 h-8 text-[#8B1E7E] flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">' +
+          '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>' +
+          '<polyline points="14 2 14 8 20 8"></polyline>' +
+        '</svg>';
+
+      let imagePreview = '';
+      if (isImage) {
+        imagePreview =
+          '<div class="mb-3">' +
+            '<img src="' + escapeHtml(safeUrl) + '" alt="' + escapeHtml(fileName) + '" ' +
+                 'class="max-h-48 rounded-lg border border-slate-200 shadow-sm" />' +
+          '</div>';
+      }
+
+      container.innerHTML =
+        '<div class="rounded-xl border border-slate-200 bg-slate-50/60 p-3">' +
+          imagePreview +
+          '<div class="flex items-center gap-3 flex-wrap sm:flex-nowrap">' +
+            (isImage ? '' : '<div class="flex-shrink-0">' + fileIcon + '</div>') +
+            '<div class="min-w-0 flex-1">' +
+              '<p class="text-xs font-semibold text-slate-700 truncate" title="' + escapeHtml(fileName) + '">' +
+                escapeHtml(fileName) +
+              '</p>' +
+              '<p class="text-[10px] text-slate-400 uppercase tracking-wider font-bold mt-0.5">' +
+                (isImage ? 'Image' : 'Document') +
+              '</p>' +
+            '</div>' +
+            '<div class="flex items-center gap-2 flex-shrink-0">' +
+              '<a href="' + escapeHtml(safeUrl) + '" target="_blank" rel="noopener" ' +
+                 'title="View attachment" ' +
+                 'class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-white hover:bg-purple-50 ' +
+                        'border border-slate-200 hover:border-[#8B1E7E] text-slate-700 hover:text-[#8B1E7E] ' +
+                        'font-semibold text-xs transition-all duration-200 hover:scale-105 active:scale-95">' +
+                viewIcon + '<span>View</span>' +
+              '</a>' +
+              '<a href="' + escapeHtml(safeUrl) + '" download="' + escapeHtml(fileName) + '" ' +
+                 'title="Download attachment" ' +
+                 'class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-[#4A154B] hover:bg-[#5A1B5C] ' +
+                        'text-white font-semibold text-xs shadow-sm hover:shadow-md ' +
+                        'transition-all duration-200 hover:scale-105 active:scale-95">' +
+                downloadIcon + '<span>Download</span>' +
+              '</a>' +
+            '</div>' +
+          '</div>' +
+        '</div>';
+    }
+
+    function renderActions(actions) {
+      const listEl  = document.getElementById('viewActionsList');
+      const countEl = document.getElementById('viewActionsCount');
+      if (!listEl) return;
+
+      const arr = Array.isArray(actions) ? actions : [];
+
+      if (countEl) countEl.textContent = String(arr.length);
+
+      if (arr.length === 0) {
+        listEl.innerHTML =
+          '<div class="text-sm text-slate-400 italic bg-slate-50 border border-dashed border-slate-200 rounded-lg px-3 py-3 text-center">' +
+            'No action records found for this grievance.' +
+          '</div>';
+        return;
+      }
+
+      let html = '';
+      arr.forEach(function (a, idx) {
+        const dateStr   = a.action_date && String(a.action_date).trim() !== '' ? String(a.action_date) : '—';
+        const summary   = a.summary && String(a.summary).trim() !== '' ? String(a.summary) : '';
+        const actionTxt = a.action_taken && String(a.action_taken).trim() !== '' ? String(a.action_taken) : '';
+        const attendee  = a.attendee_name && String(a.attendee_name).trim() !== '' ? String(a.attendee_name) : '—';
+        const attType   = a.attendee_type && String(a.attendee_type).trim() !== '' ? String(a.attendee_type) : '';
+
+        html +=
+          '<div class="rounded-xl border border-slate-200 bg-slate-50/60 overflow-hidden">' +
+            '<div class="flex items-center justify-between px-4 py-2 bg-white border-b border-slate-100">' +
+              '<div class="flex items-center gap-2">' +
+                '<span class="inline-flex items-center justify-center w-6 h-6 rounded-full bg-gradient-to-br from-[#4A154B] to-[#8B1E7E] text-white text-[10px] font-bold">' +
+                  (idx + 1) +
+                '</span>' +
+                '<span class="text-xs font-bold text-slate-700">' + escapeHtml(dateStr) + '</span>' +
+              '</div>' +
+              '<div class="text-right min-w-0">' +
+                '<p class="text-[10px] uppercase font-bold tracking-wider text-slate-400">Attendee</p>' +
+                '<p class="text-xs font-semibold text-slate-700 truncate">' +
+                  escapeHtml(attendee) +
+                  (attType ? ' <span class="text-[10px] text-slate-400 font-normal">(' + escapeHtml(attType) + ')</span>' : '') +
+                '</p>' +
+              '</div>' +
+            '</div>' +
+            '<div class="px-4 py-3 space-y-2">' +
+              '<div>' +
+                '<p class="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1">Summary</p>' +
+                '<p class="text-sm text-slate-700 whitespace-pre-wrap break-words">' +
+                  (summary !== '' ? escapeHtml(summary) : '<span class="text-slate-400 italic">—</span>') +
+                '</p>' +
+              '</div>' +
+              '<div>' +
+                '<p class="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1">Action Taken</p>' +
+                '<p class="text-sm text-slate-700 whitespace-pre-wrap break-words">' +
+                  (actionTxt !== '' ? escapeHtml(actionTxt) : '<span class="text-slate-400 italic">—</span>') +
+                '</p>' +
+              '</div>' +
+            '</div>' +
+          '</div>';
+      });
+
+      listEl.innerHTML = html;
+    }
 
     function openViewModal(data) {
-      const setText = function (id, value) {
-        const el = document.getElementById(id);
-        if (!el) return;
-        el.textContent = (value !== undefined && value !== null && String(value).trim() !== '') ? String(value) : '—';
-      };
+      if (!data) data = {};
 
-      setText('viewName',         data.name);
-      setText('viewRole',         data.role);
-      setText('viewClassDept',    data.class_department);
-      setText('viewNumber',       data.grievance_number);
-      setText('viewType',         data.grievance_type);
-      setText('viewPostedDate',   data.posted_date);
-      setText('viewReplyDate',    data.reply_date);
-      setText('viewSubject',      data.subject);
-      setText('viewDescription',  data.description);
-      setText('viewReplyDetails', data.reply_details);
-      setText('viewFeedbackDetails', data.feedback_details);
+      setTextOrDash('viewName',         data.name);
+      setTextOrDash('viewRole',         data.role);
+      setTextOrDash('viewClassDept',    data.class_department);
+      setTextOrDash('viewNumber',       data.grievance_number);
+      setTextOrDash('viewType',         data.grievance_type);
+      setTextOrDash('viewPostedDate',   data.posted_date);
+      setTextOrDash('viewReplyDate',    data.reply_date);
+      setTextOrDash('viewSubject',      data.subject);
+      setTextOrDash('viewDescription',  data.description);
+      setTextOrDash('viewReplyDetails', data.reply_details);
+      setTextOrDash('viewFeedbackDetails', data.feedback_details);
+
+      // Attachments (View + Download)
+      renderAttachment('viewAttachmentContent',      data.attachment_url);
+      renderAttachment('viewReplyAttachmentContent', data.reply_attachment_url);
+
+      // Actions
+      renderActions(data.actions);
 
       const statusEl = document.getElementById('viewStatus');
       if (statusEl) {
@@ -1911,28 +2014,9 @@ if ($conn instanceof mysqli) {
       document.body.classList.remove('overflow-hidden');
     }
 
-    const editModal = document.getElementById('editModal');
-    function openEditModal(data) {
-      document.getElementById('editGrievanceId').value    = data.id || '';
-      document.getElementById('editNumber').value         = data.number || '—';
-      document.getElementById('edit_subject').value       = data.subject || '';
-      document.getElementById('edit_description').value   = data.description || '';
-      document.getElementById('edit_status').value        = data.status || 'Pending';
-      document.getElementById('edit_reply_details').value = data.reply_details || '';
-
-      editModal.classList.remove('hidden');
-      document.body.classList.add('overflow-hidden');
-      setTimeout(function () {
-        const s = document.getElementById('edit_subject');
-        if (s) s.focus();
-      }, 80);
-      if (typeof lucide !== 'undefined') lucide.createIcons();
-    }
-    function closeEditModal() {
-      editModal.classList.add('hidden');
-      document.body.classList.remove('overflow-hidden');
-    }
-
+    // --------------------------------------------------------------------
+    // Delete confirmation
+    // --------------------------------------------------------------------
     const deleteConfirmModal = document.getElementById('deleteConfirmModal');
     const deleteConfirmPanel = document.getElementById('deleteConfirmPanel');
     const deleteNameDisplay  = document.getElementById('deleteNameDisplay');
@@ -1969,6 +2053,9 @@ if ($conn instanceof mysqli) {
       });
     }
 
+    // --------------------------------------------------------------------
+    // Create modal
+    // --------------------------------------------------------------------
     const createModal = document.getElementById('createSummaryModal');
     const createForm  = document.getElementById('createSummaryForm');
     function openCreateModal() {
@@ -1986,6 +2073,9 @@ if ($conn instanceof mysqli) {
       if (createForm) createForm.reset();
     }
 
+    // --------------------------------------------------------------------
+    // Bulk upload modal
+    // --------------------------------------------------------------------
     const bulkModal = document.getElementById('bulkUploadModal');
     const bulkForm  = document.getElementById('bulkUploadForm');
     function openBulkUploadModal() {
@@ -2003,6 +2093,9 @@ if ($conn instanceof mysqli) {
       if (bulkForm) bulkForm.reset();
     }
 
+    // --------------------------------------------------------------------
+    // Logout
+    // --------------------------------------------------------------------
     const logoutConfirmModal = document.getElementById('logoutConfirmModal');
     const logoutConfirmPanel = document.getElementById('logoutConfirmPanel');
     const confirmLogoutBtn   = document.getElementById('confirmLogoutBtn');
@@ -2083,7 +2176,6 @@ if ($conn instanceof mysqli) {
     document.addEventListener('keydown', function (e) {
       if (e.key !== 'Escape') return;
       if (viewModal && !viewModal.classList.contains('hidden')) closeViewModal();
-      if (editModal && !editModal.classList.contains('hidden')) closeEditModal();
       if (deleteConfirmModal && !deleteConfirmModal.classList.contains('hidden')) closeDeleteModal();
       if (createModal && !createModal.classList.contains('hidden')) closeCreateModal();
       if (bulkModal && !bulkModal.classList.contains('hidden')) closeBulkUploadModal();

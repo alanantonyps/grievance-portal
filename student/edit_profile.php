@@ -225,7 +225,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (empty($formErrors) && $conn !== null) {
 
         try {
-            // -------- 1) Fetch old profile image for cleanup -----
+            // -------- 1) Fetch old profile image for cleanup --------
             $oldProfileImage = '';
             $stmtOld = $conn->prepare("SELECT profile_image FROM students WHERE user_id = ? LIMIT 1");
             if ($stmtOld) {
@@ -299,7 +299,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
             $stmt->close();
 
-            // -------- 3) Delete old profile image if replaced -----
+            // -------- 3) Delete old profile image if replaced --------
             if ($newProfilePictureRelative !== null && !empty($oldProfileImage) && $oldProfileImage !== $newProfilePictureRelative) {
                 $oldAbs = __DIR__ . '/../' . ltrim($oldProfileImage, '/');
                 if (file_exists($oldAbs) && is_file($oldAbs)) {
@@ -563,10 +563,28 @@ $countryCodes = [
             fadeInUp: {
               '0%':   { opacity: '0', transform: 'translateY(12px)' },
               '100%': { opacity: '1', transform: 'translateY(0)' }
+            },
+            dropdownFade: {
+              '0%':   { opacity: '0', transform: 'translateY(-8px) scale(0.98)' },
+              '100%': { opacity: '1', transform: 'translateY(0) scale(1)' }
+            },
+            modalFadeIn: {
+              '0%':   { opacity: '0', transform: 'scale(0.96)' },
+              '100%': { opacity: '1', transform: 'scale(1)' }
+            },
+            confirmShake: {
+              '0%, 100%': { transform: 'translateX(0)' },
+              '20%':      { transform: 'translateX(-6px)' },
+              '40%':      { transform: 'translateX(6px)' },
+              '60%':      { transform: 'translateX(-4px)' },
+              '80%':      { transform: 'translateX(4px)' }
             }
           },
           animation: {
-            'fade-in-up': 'fadeInUp 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards'
+            'fade-in-up': 'fadeInUp 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards',
+            'dropdown':   'dropdownFade 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards',
+            'modal-in':   'modalFadeIn 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards',
+            'confirm-shake': 'confirmShake 0.5s cubic-bezier(0.16, 1, 0.3, 1)'
           }
         }
       }
@@ -612,7 +630,8 @@ $countryCodes = [
 
       </nav>
 
-      <a href="../logout.php?role=student"
+      <!-- Sidebar Logout (triggers modal) -->
+      <a href="#"
          id="sidebarLogoutBtn"
          class="group relative w-12 h-12 rounded-xl bg-white/10 hover:bg-red-500/40 flex items-center justify-center text-white transition-all hover:scale-110"
          title="Logout">
@@ -647,20 +666,106 @@ $countryCodes = [
                  class="hidden sm:block h-8 md:h-9 w-auto object-contain" />
           </div>
 
-          <div class="relative">
-            <div class="flex items-center space-x-3 px-3 py-2">
+          <!-- =====================================================
+               PROFILE DROPDOWN
+               ===================================================== -->
+          <div class="relative" id="profile-dropdown-container">
+            <button id="profile-dropdown-btn"
+                    type="button"
+                    aria-haspopup="true"
+                    aria-expanded="false"
+                    class="flex items-center space-x-3 px-3 py-2 rounded-lg hover:bg-slate-100 transition-colors">
+
               <?php if ($existingPreviewUrl): ?>
-                <img src="<?= e($existingPreviewUrl) ?>" alt="Student" class="w-10 h-10 rounded-full object-cover border-2 border-[#C5A059]" />
+                <img src="<?= e($existingPreviewUrl) ?>" alt="<?= e($formData['username'] ?: 'Student') ?>"
+                     class="w-10 h-10 rounded-full object-cover border-2 border-[#C5A059] shadow-md ring-2 ring-purple-100" />
               <?php else: ?>
-                <div class="w-10 h-10 rounded-full bg-gradient-to-br from-[#4A154B] to-[#8B1E7E] flex items-center justify-center text-white">
+                <div class="w-10 h-10 rounded-full bg-gradient-to-br from-[#4A154B] to-[#8B1E7E]
+                            flex items-center justify-center text-white shadow-md ring-2 ring-purple-100">
                   <i data-lucide="user" class="w-5 h-5"></i>
                 </div>
               <?php endif; ?>
+
               <span class="hidden sm:block text-sm font-semibold text-slate-700">
                 <?= e($formData['username'] ?: 'Student') ?>
               </span>
+              <i data-lucide="chevron-down" id="profile-chevron"
+                 class="w-4 h-4 text-slate-500 transition-transform duration-300"></i>
+            </button>
+
+            <!-- Dropdown menu -->
+            <div id="profile-dropdown-menu"
+                 class="hidden absolute right-0 mt-2 w-64 bg-white rounded-xl shadow-2xl
+                        border border-slate-200 py-2 z-50 overflow-hidden">
+
+              <!-- Header info -->
+              <div class="px-4 py-3 border-b border-slate-100 bg-gradient-to-r from-slate-50 to-white">
+                <div class="flex items-center space-x-3">
+                  <?php if ($existingPreviewUrl): ?>
+                    <img src="<?= e($existingPreviewUrl) ?>" alt="<?= e($formData['username'] ?: 'Student') ?>"
+                         class="w-12 h-12 rounded-full object-cover border-2 border-[#C5A059]" />
+                  <?php else: ?>
+                    <div class="w-12 h-12 rounded-full bg-gradient-to-br from-[#4A154B] to-[#8B1E7E]
+                                flex items-center justify-center text-white">
+                      <i data-lucide="user" class="w-6 h-6 text-white"></i>
+                    </div>
+                  <?php endif; ?>
+                  <div class="min-w-0 flex-1">
+                    <p class="text-sm font-bold text-slate-800 truncate">
+                      <?= e($formData['name'] ?: ($formData['username'] ?: 'Student')) ?>
+                    </p>
+                    <p class="text-xs text-slate-500 truncate">
+                      <?= e($formData['email'] ?: 'student@rajagiri.edu') ?>
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Menu items -->
+              <a href="dashboard.php"
+                 class="flex items-center px-4 py-2.5 text-sm text-slate-700
+                        hover:bg-gradient-to-r hover:from-pink-50 hover:to-purple-50
+                        hover:text-[#8B1E7E] transition-all duration-200 group/item">
+                <i data-lucide="layout-dashboard"
+                   class="w-4 h-4 mr-3 text-[#8B1E7E] group-hover/item:scale-110 transition-transform"></i>
+                <span class="font-medium">Dashboard</span>
+                <i data-lucide="arrow-right"
+                   class="w-4 h-4 ml-auto opacity-0 group-hover/item:opacity-100 text-[#8B1E7E] transition-opacity"></i>
+              </a>
+
+              <a href="profile.php"
+                 class="flex items-center px-4 py-2.5 text-sm text-slate-700
+                        hover:bg-gradient-to-r hover:from-pink-50 hover:to-purple-50
+                        hover:text-[#8B1E7E] transition-all duration-200 group/item">
+                <i data-lucide="user"
+                   class="w-4 h-4 mr-3 text-[#8B1E7E] group-hover/item:scale-110 transition-transform"></i>
+                <span class="font-medium">My Profile</span>
+                <i data-lucide="arrow-right"
+                   class="w-4 h-4 ml-auto opacity-0 group-hover/item:opacity-100 text-[#8B1E7E] transition-opacity"></i>
+              </a>
+
+              <a href="change_password.php"
+                 class="flex items-center px-4 py-2.5 text-sm text-slate-700
+                        hover:bg-gradient-to-r hover:from-pink-50 hover:to-purple-50
+                        hover:text-[#8B1E7E] transition-all duration-200 group/item">
+                <i data-lucide="key"
+                   class="w-4 h-4 mr-3 text-[#8B1E7E] group-hover/item:scale-110 transition-transform"></i>
+                <span class="font-medium">Change Password</span>
+                <i data-lucide="arrow-right"
+                   class="w-4 h-4 ml-auto opacity-0 group-hover/item:opacity-100 text-[#8B1E7E] transition-opacity"></i>
+              </a>
+
+              <div class="border-t border-slate-100 mt-2 pt-2">
+                <a href="#" id="dropdownLogoutBtn"
+                   class="flex items-center px-4 py-2.5 text-sm text-red-600
+                          hover:bg-red-50 transition-all duration-200 group/item">
+                  <i data-lucide="log-out" class="w-4 h-4 mr-3 group-hover/item:scale-110 transition-transform"></i>
+                  <span class="font-medium">Logout</span>
+                </a>
+              </div>
             </div>
           </div>
+          <!-- ===================================================== -->
 
         </div>
       </header>
@@ -1153,6 +1258,62 @@ $countryCodes = [
     </div>
   </div>
 
+  <!-- ============================================================ -->
+  <!-- CUSTOM LOGOUT CONFIRMATION MODAL                              -->
+  <!-- ============================================================ -->
+  <div id="logoutConfirmModal" class="hidden fixed inset-0 z-[70] flex items-center justify-center p-4">
+    <div class="absolute inset-0 bg-black/50 backdrop-blur-sm" onclick="closeLogoutModal()"></div>
+
+    <div id="logoutConfirmPanel"
+         class="relative w-full max-w-md bg-white rounded-2xl shadow-2xl animate-modal-in overflow-hidden">
+
+      <div class="h-1.5 w-full bg-gradient-to-r from-[#6A2C8A] via-[#8B1E7E] to-[#C43A7A]"></div>
+
+      <div class="px-6 pt-6 pb-2 flex flex-col items-center text-center">
+        <div class="w-16 h-16 rounded-full flex items-center justify-center mb-4
+                    bg-gradient-to-br from-red-100 to-pink-100 ring-4 ring-red-50">
+          <i data-lucide="log-out" class="w-8 h-8 text-red-500"></i>
+        </div>
+
+        <h3 class="text-xl font-bold text-slate-800 mb-2">Log Out?</h3>
+
+        <p class="text-sm text-slate-500 leading-relaxed">
+          You are about to log out of
+          <span class="font-bold text-[#8B1E7E] break-words"><?= e($formData['name'] ?: ($formData['username'] ?: 'Student')) ?></span>.
+          Any unsaved changes will be lost.
+        </p>
+
+        <p class="text-xs text-slate-400 font-medium mt-3 flex items-center gap-1.5">
+          <i data-lucide="info" class="w-3.5 h-3.5"></i>
+          You can log back in anytime.
+        </p>
+      </div>
+
+      <div class="px-6 py-5 mt-2 flex flex-col-reverse sm:flex-row gap-3">
+        <button type="button"
+                onclick="closeLogoutModal()"
+                class="flex-1 px-5 py-3 rounded-xl font-semibold text-slate-700
+                       bg-slate-100 hover:bg-slate-200 border border-slate-200
+                       transition-all duration-200 active:scale-95">
+          Cancel
+        </button>
+
+        <button type="button"
+                id="confirmLogoutBtn"
+                class="flex-1 px-5 py-3 rounded-xl font-bold text-white
+                       bg-gradient-to-r from-red-500 via-red-600 to-rose-600
+                       hover:from-red-600 hover:via-red-700 hover:to-rose-700
+                       shadow-lg shadow-red-500/30 hover:shadow-red-500/50
+                       transition-all duration-300 hover:-translate-y-0.5 active:scale-95
+                       flex items-center justify-center gap-2">
+          <i data-lucide="log-out" class="w-4 h-4"></i>
+          <span>Log Out</span>
+        </button>
+      </div>
+
+    </div>
+  </div>
+
   <!-- ====================== SCRIPTS ====================== -->
   <script>
     if (typeof lucide !== 'undefined') {
@@ -1280,6 +1441,108 @@ $countryCodes = [
         });
       });
     })();
+
+    // ---- Profile Dropdown (top header) ----
+    (function initProfileDropdown() {
+      const btn       = document.getElementById('profile-dropdown-btn');
+      const menu      = document.getElementById('profile-dropdown-menu');
+      const chevron   = document.getElementById('profile-chevron');
+      const container = document.getElementById('profile-dropdown-container');
+
+      if (!btn || !menu || !container) return;
+
+      btn.addEventListener('click', function (e) {
+        e.stopPropagation();
+        const isOpen = !menu.classList.contains('hidden');
+        if (isOpen) {
+          menu.classList.add('hidden');
+          menu.classList.remove('animate-dropdown');
+          if (chevron) chevron.classList.remove('rotate-180');
+          btn.setAttribute('aria-expanded', 'false');
+        } else {
+          menu.classList.remove('hidden');
+          menu.classList.add('animate-dropdown');
+          if (chevron) chevron.classList.add('rotate-180');
+          btn.setAttribute('aria-expanded', 'true');
+        }
+      });
+
+      document.addEventListener('click', function (e) {
+        if (!container.contains(e.target)) {
+          menu.classList.add('hidden');
+          menu.classList.remove('animate-dropdown');
+          if (chevron) chevron.classList.remove('rotate-180');
+          btn.setAttribute('aria-expanded', 'false');
+        }
+      });
+
+      document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape') {
+          menu.classList.add('hidden');
+          menu.classList.remove('animate-dropdown');
+          if (chevron) chevron.classList.remove('rotate-180');
+          btn.setAttribute('aria-expanded', 'false');
+        }
+      });
+    })();
+
+    // ============================================================
+    // LOGOUT CONFIRMATION MODAL
+    // ============================================================
+    const logoutConfirmModal = document.getElementById('logoutConfirmModal');
+    const logoutConfirmPanel = document.getElementById('logoutConfirmPanel');
+    const confirmLogoutBtn   = document.getElementById('confirmLogoutBtn');
+
+    const LOGOUT_URL = '../logout.php?role=student';
+
+    function openLogoutModal() {
+      if (!logoutConfirmModal) return;
+      logoutConfirmModal.classList.remove('hidden');
+      document.body.classList.add('overflow-hidden');
+
+      if (logoutConfirmPanel) {
+        logoutConfirmPanel.classList.remove('animate-confirm-shake');
+        void logoutConfirmPanel.offsetWidth;
+        logoutConfirmPanel.classList.add('animate-confirm-shake');
+      }
+
+      setTimeout(function () { if (confirmLogoutBtn) confirmLogoutBtn.focus(); }, 80);
+      if (typeof lucide !== 'undefined') lucide.createIcons();
+    }
+
+    function closeLogoutModal() {
+      if (!logoutConfirmModal) return;
+      logoutConfirmModal.classList.add('hidden');
+      document.body.classList.remove('overflow-hidden');
+    }
+
+    (function () {
+      const triggers = [
+        document.getElementById('sidebarLogoutBtn'),
+        document.getElementById('dropdownLogoutBtn'),
+      ];
+      triggers.forEach(function (btn) {
+        if (!btn) return;
+        btn.addEventListener('click', function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          openLogoutModal();
+        });
+      });
+    })();
+
+    if (confirmLogoutBtn) {
+      confirmLogoutBtn.addEventListener('click', function () {
+        confirmLogoutBtn.classList.add('opacity-50', 'pointer-events-none');
+        window.location.href = LOGOUT_URL;
+      });
+    }
+
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && logoutConfirmModal && !logoutConfirmModal.classList.contains('hidden')) {
+        closeLogoutModal();
+      }
+    });
   </script>
 
   <script src="../assets/js/index.js"></script>

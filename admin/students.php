@@ -8,13 +8,13 @@
  * Features:
  *   • Lists students of a specific class (via ?class_id=X)
  *   • Add / Edit / View / Delete students (with admission_number)
- *   • Reset student password
+ *   • Set password (custom password + confirm)
  *   • Bulk delete selected students
  *   • Bulk Excel/CSV import with sample template
  *   • Live search + entries-per-page dropdown
- *   • Themed delete & reset confirmation modals
+ *   • Themed delete / set-password / logout confirmation modals
  *   • Flash messages auto-dismiss after 3 seconds
- *   • Show/hide password toggle in Add Student form
+ *   • Show/hide password toggles
  *   • Mobile number must be exactly 10 digits
  * ---------------------------------------------------------------------------
  */
@@ -81,9 +81,6 @@ function e(?string $v): string
     return htmlspecialchars((string) $v, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
 }
 
-/**
- * Validate that a mobile number is exactly 10 digits.
- */
 function isValidMobile(string $mobile): bool
 {
     return (bool) preg_match('/^[0-9]{10}$/', $mobile);
@@ -100,7 +97,7 @@ if ($classId <= 0) {
 }
 
 // ---------------------------------------------------------------------------
-// 6. SAMPLE TEMPLATE DOWNLOAD  (?download_template=1)
+// 6. SAMPLE TEMPLATE DOWNLOAD (?download_template=1)
 // ---------------------------------------------------------------------------
 if (isset($_GET['download_template']) && (string) $_GET['download_template'] === '1') {
     $filename = 'students_import_template.csv';
@@ -111,48 +108,18 @@ if (isset($_GET['download_template']) && (string) $_GET['download_template'] ===
     header('Expires: 0');
 
     $out = fopen('php://output', 'w');
-
-    // UTF-8 BOM so Excel opens it correctly
     fwrite($out, "\xEF\xBB\xBF");
 
-    // Header row — matches expected column order
-    fputcsv($out, [
-        'admission_number',
-        'name',
-        'email',
-        'contact_number',
-        'address',
-        'username',
-        'password',
-    ]);
-
-    // Example rows
-    fputcsv($out, [
-        'RCSS2025001',
-        'John Doe',
-        'john.doe@example.com',
-        '9876543210',
-        'Kochi, Kerala',
-        'johndoe',
-        'Student@123',
-    ]);
-
-    fputcsv($out, [
-        'RCSS2025002',
-        'Jane Smith',
-        'jane.smith@example.com',
-        '9876543211',
-        'Thrissur, Kerala',
-        'janesmith',
-        'Student@456',
-    ]);
+    fputcsv($out, ['admission_number', 'name', 'email', 'contact_number', 'address', 'username', 'password']);
+    fputcsv($out, ['RCSS2025001', 'John Doe', 'john.doe@example.com', '9876543210', 'Kochi, Kerala', 'johndoe', 'Student@123']);
+    fputcsv($out, ['RCSS2025002', 'Jane Smith', 'jane.smith@example.com', '9876543211', 'Thrissur, Kerala', 'janesmith', 'Student@456']);
 
     fclose($out);
     exit;
 }
 
 // ---------------------------------------------------------------------------
-// 7. FETCH ADMIN PROFILE (for header)
+// 7. FETCH ADMIN PROFILE
 // ---------------------------------------------------------------------------
 $adminData = [
     'username'        => $_SESSION['username'] ?? 'Admin',
@@ -163,10 +130,7 @@ $adminData = [
 
 if ($conn instanceof mysqli) {
     try {
-        $sql = "SELECT  u.username,
-                        ap.name,
-                        ap.email,
-                        ap.profile_picture
+        $sql = "SELECT  u.username, ap.name, ap.email, ap.profile_picture
                 FROM users u
                 LEFT JOIN admin_profiles ap ON ap.user_id = u.id
                 WHERE u.id = ?
@@ -214,9 +178,7 @@ $classExists = false;
 
 if ($conn instanceof mysqli) {
     try {
-        $sql = "SELECT  cl.id,
-                        cl.class_name,
-                        co.course_name
+        $sql = "SELECT cl.id, cl.class_name, co.course_name
                 FROM classes cl
                 JOIN courses co ON cl.course_id = co.id
                 WHERE cl.id = ?
@@ -278,7 +240,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $conn instanceof mysqli) {
             try {
                 $conn->begin_transaction();
 
-                // Duplicate checks
                 $chk = $conn->prepare("SELECT id FROM users WHERE username = ? LIMIT 1");
                 $chk->bind_param('s', $username);
                 $chk->execute();
@@ -301,7 +262,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $conn instanceof mysqli) {
                 if ($dupEmail)     throw new Exception('Email is already registered for another student.');
                 if ($dupAdmission) throw new Exception('Admission number already exists.');
 
-                // Create user account
                 $hash = password_hash($password, PASSWORD_BCRYPT);
                 $role = 'STUDENT';
 
@@ -311,7 +271,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $conn instanceof mysqli) {
                 $newUserId = (int) $conn->insert_id;
                 $stmtU->close();
 
-                // Insert student record
                 $stmtS = $conn->prepare("INSERT INTO students (user_id, class_id, admission_number, name, email, contact_number, address) VALUES (?, ?, ?, ?, ?, ?, ?)");
                 $stmtS->bind_param('iisssss', $newUserId, $classId, $admissionNumber, $name, $email, $mobileNumber, $address);
                 $stmtS->execute();
@@ -362,7 +321,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $conn instanceof mysqli) {
                     throw new Exception('Student record not found.');
                 }
 
-                // Duplicate checks (excluding self)
                 $chk = $conn->prepare("SELECT id FROM users WHERE username = ? AND id != ? LIMIT 1");
                 $chk->bind_param('si', $username, $linkedUserId);
                 $chk->execute();
@@ -390,13 +348,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $conn instanceof mysqli) {
                 }
                 $chk3->close();
 
-                // Update users.username
                 $stmtU = $conn->prepare("UPDATE users SET username = ? WHERE id = ?");
                 $stmtU->bind_param('si', $username, $linkedUserId);
                 $stmtU->execute();
                 $stmtU->close();
 
-                // Update students record
                 $stmtS = $conn->prepare("UPDATE students SET admission_number = ?, name = ?, email = ?, contact_number = ?, address = ? WHERE id = ?");
                 $stmtS->bind_param('sssssi', $admissionNumber, $name, $email, $mobileNumber, $address, $studentId);
                 $stmtS->execute();
@@ -514,7 +470,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $conn instanceof mysqli) {
             $ext      = strtolower(pathinfo($origName, PATHINFO_EXTENSION));
 
             if (!in_array($ext, ['csv', 'txt'], true)) {
-                $flashError = 'Unsupported file type. Please upload a CSV file (XLSX/XLS should be saved as CSV first).';
+                $flashError = 'Unsupported file type. Please upload a CSV file.';
             } elseif (!is_uploaded_file($tmpPath)) {
                 $flashError = 'Invalid upload. Please try again.';
             } else {
@@ -524,17 +480,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $conn instanceof mysqli) {
                 } else {
                     @set_time_limit(0);
 
-                    $rowNumber     = 0;
-                    $insertedCount = 0;
-                    $skippedRows   = [];
-                    $seenUsernames = [];
-                    $seenEmails    = [];
-                    $seenAdmissions= [];
+                    $rowNumber      = 0;
+                    $insertedCount  = 0;
+                    $skippedRows    = [];
+                    $seenUsernames  = [];
+                    $seenEmails     = [];
+                    $seenAdmissions = [];
 
                     try {
                         $conn->begin_transaction();
 
-                        // Prepare insert statements
                         $stmtU = $conn->prepare("INSERT INTO users (username, password, role, status) VALUES (?, ?, 'STUDENT', 'Approved')");
                         $stmtS = $conn->prepare("INSERT INTO students (user_id, class_id, admission_number, name, email, contact_number, address) VALUES (?, ?, ?, ?, ?, ?, ?)");
 
@@ -542,21 +497,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $conn instanceof mysqli) {
                             throw new Exception('Failed to prepare insert statements.');
                         }
 
-                        // Prepare duplicate check statements
                         $chkUser = $conn->prepare("SELECT id FROM users WHERE username = ? LIMIT 1");
                         $chkMail = $conn->prepare("SELECT id FROM students WHERE email = ? LIMIT 1");
                         $chkAdm  = $conn->prepare("SELECT id FROM students WHERE admission_number = ? LIMIT 1");
 
                         while (($row = fgetcsv($handle, 0, ',')) !== false) {
-
                             $rowNumber++;
 
-                            // Skip empty lines
                             if (count($row) === 1 && trim((string) $row[0]) === '') {
                                 continue;
                             }
 
-                            // Skip header row on first line
                             if ($rowNumber === 1) {
                                 $firstCell = strtolower(trim((string) ($row[0] ?? '')));
                                 if ($firstCell === 'admission_number' || $firstCell === 'admission no' || $firstCell === 'admissionno') {
@@ -564,13 +515,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $conn instanceof mysqli) {
                                 }
                             }
 
-                            // Expect 7 columns
                             if (count($row) < 7) {
                                 $skippedRows[] = "Row {$rowNumber}: Not enough columns (expected 7).";
                                 continue;
                             }
 
-                            // Extract and trim
                             $rAdmission = trim((string) ($row[0] ?? ''));
                             $rName      = trim((string) ($row[1] ?? ''));
                             $rEmail     = trim((string) ($row[2] ?? ''));
@@ -579,10 +528,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $conn instanceof mysqli) {
                             $rUsername  = trim((string) ($row[5] ?? ''));
                             $rPassword  = (string)       ($row[6] ?? '');
 
-                            // Remove UTF-8 BOM from first cell
                             $rAdmission = preg_replace('/^\xEF\xBB\xBF/', '', $rAdmission) ?? $rAdmission;
 
-                            // Required fields
                             if ($rAdmission === '' || $rName === '' || $rEmail === '' || $rMobile === '' || $rUsername === '' || $rPassword === '') {
                                 $skippedRows[] = "Row {$rowNumber}: Missing required fields.";
                                 continue;
@@ -600,7 +547,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $conn instanceof mysqli) {
                             $lowerEmail = strtolower($rEmail);
                             $lowerAdm   = strtolower($rAdmission);
 
-                            // Within-file duplicate checks
                             if (isset($seenUsernames[$lowerUser])) {
                                 $skippedRows[] = "Row {$rowNumber}: Duplicate username within file ({$rUsername}).";
                                 continue;
@@ -614,7 +560,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $conn instanceof mysqli) {
                                 continue;
                             }
 
-                            // DB duplicate checks
                             $chkUser->bind_param('s', $rUsername);
                             $chkUser->execute();
                             $chkUser->store_result();
@@ -645,7 +590,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $conn instanceof mysqli) {
                             }
                             $chkAdm->free_result();
 
-                            // Insert user
                             $hash = password_hash($rPassword, PASSWORD_BCRYPT);
                             $stmtU->bind_param('ss', $rUsername, $hash);
                             if (!$stmtU->execute()) {
@@ -653,27 +597,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $conn instanceof mysqli) {
                             }
                             $newUserId = (int) $conn->insert_id;
 
-                            // Insert student
                             $stmtS->bind_param('iisssss', $newUserId, $classId, $rAdmission, $rName, $rEmail, $rMobile, $rAddress);
                             if (!$stmtS->execute()) {
                                 throw new Exception("Row {$rowNumber}: Failed to create student record.");
                             }
 
-                            // Track as successfully inserted
-                            $seenUsernames[$lowerUser]   = true;
-                            $seenEmails[$lowerEmail]     = true;
-                            $seenAdmissions[$lowerAdm]   = true;
+                            $seenUsernames[$lowerUser] = true;
+                            $seenEmails[$lowerEmail]   = true;
+                            $seenAdmissions[$lowerAdm] = true;
                             $insertedCount++;
                         }
 
-                        // Cleanup prepared statements
                         $stmtU->close();
                         $stmtS->close();
                         $chkUser->close();
                         $chkMail->close();
                         $chkAdm->close();
 
-                        // If nothing was inserted, treat as a failed import
                         if ($insertedCount === 0) {
                             throw new Exception('No valid rows were found in the uploaded file.');
                         }
@@ -702,10 +642,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $conn instanceof mysqli) {
         }
     }
 
-    // -------- RESET PASSWORD --------
-    if ($action === 'reset_password') {
-        $studentId = (int) ($_POST['student_id'] ?? 0);
-        if ($studentId > 0) {
+    // -------- SET PASSWORD (replaces reset_password) --------
+    if ($action === 'set_password') {
+        $studentId       = (int) ($_POST['student_id']        ?? 0);
+        $newPassword     = (string) ($_POST['new_password']    ?? '');
+        $confirmPassword = (string) ($_POST['confirm_password'] ?? '');
+
+        if ($studentId <= 0) {
+            $flashError = 'Invalid student.';
+        } elseif ($newPassword === '' || $confirmPassword === '') {
+            $flashError = 'Please enter and confirm the new password.';
+        } elseif (strlen($newPassword) < 6) {
+            $flashError = 'Password must be at least 6 characters long.';
+        } elseif ($newPassword !== $confirmPassword) {
+            $flashError = 'Passwords do not match.';
+        }
+
+        if ($flashError === '') {
             try {
                 $stmtG = $conn->prepare("SELECT user_id FROM students WHERE id = ? LIMIT 1");
                 $stmtG->bind_param('i', $studentId);
@@ -715,21 +668,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $conn instanceof mysqli) {
                 $stmtG->close();
 
                 if ($linkedUserId > 0) {
-                    $newPassword = 'Student@' . random_int(1000, 9999);
-                    $hash        = password_hash($newPassword, PASSWORD_BCRYPT);
+                    $hash = password_hash($newPassword, PASSWORD_BCRYPT);
 
                     $stmtU = $conn->prepare("UPDATE users SET password = ? WHERE id = ?");
                     $stmtU->bind_param('si', $hash, $linkedUserId);
                     $stmtU->execute();
                     $stmtU->close();
 
-                    $flashSuccess = 'Password reset successfully. New password: ' . $newPassword;
+                    $flashSuccess = 'Password updated successfully.';
                 } else {
                     $flashError = 'Linked user account not found.';
                 }
             } catch (Throwable $ex) {
-                error_log('[Reset Password] ' . $ex->getMessage());
-                $flashError = 'A system error occurred while resetting the password.';
+                error_log('[Set Password] ' . $ex->getMessage());
+                $flashError = 'A system error occurred while setting the password.';
             }
         }
     }
@@ -751,7 +703,6 @@ if (!empty($_SESSION['flash_error'])) {
     unset($_SESSION['flash_error']);
 }
 
-// Optional detailed skip report from bulk import
 $importSkippedRows = [];
 if (!empty($_SESSION['import_skipped_rows']) && is_array($_SESSION['import_skipped_rows'])) {
     $importSkippedRows = $_SESSION['import_skipped_rows'];
@@ -765,16 +716,10 @@ $students = [];
 
 if ($conn instanceof mysqli) {
     try {
-        $sql = "SELECT  st.id,
-                        st.user_id,
-                        st.class_id,
-                        st.admission_number,
-                        st.name,
-                        st.email,
-                        st.contact_number,
-                        st.address,
-                        u.username,
-                        u.status
+        $sql = "SELECT  st.id, st.user_id, st.class_id,
+                        st.admission_number, st.name, st.email,
+                        st.contact_number, st.address,
+                        u.username, u.status
                 FROM students st
                 LEFT JOIN users u ON st.user_id = u.id
                 WHERE st.class_id = ?
@@ -818,33 +763,12 @@ if ($conn instanceof mysqli) {
             brandGold:   '#C5A059'
           },
           keyframes: {
-            fadeInUp: {
-              '0%':   { opacity: '0', transform: 'translateY(12px)' },
-              '100%': { opacity: '1', transform: 'translateY(0)' }
-            },
-            dropdownFade: {
-              '0%':   { opacity: '0', transform: 'translateY(-8px) scale(0.98)' },
-              '100%': { opacity: '1', transform: 'translateY(0) scale(1)' }
-            },
-            modalFadeIn: {
-              '0%':   { opacity: '0', transform: 'scale(0.96)' },
-              '100%': { opacity: '1', transform: 'scale(1)' }
-            },
-            confirmShake: {
-              '0%, 100%': { transform: 'translateX(0)' },
-              '20%':      { transform: 'translateX(-6px)' },
-              '40%':      { transform: 'translateX(6px)' },
-              '60%':      { transform: 'translateX(-4px)' },
-              '80%':      { transform: 'translateX(4px)' }
-            },
-            flashIn: {
-              '0%':   { opacity: '0', transform: 'translateY(-10px)' },
-              '100%': { opacity: '1', transform: 'translateY(0)' }
-            },
-            flashOut: {
-              '0%':   { opacity: '1', transform: 'translateY(0)', maxHeight: '200px' },
-              '100%': { opacity: '0', transform: 'translateY(-10px)', maxHeight: '0px' }
-            }
+            fadeInUp: { '0%': { opacity: '0', transform: 'translateY(12px)' }, '100%': { opacity: '1', transform: 'translateY(0)' } },
+            dropdownFade: { '0%': { opacity: '0', transform: 'translateY(-8px) scale(0.98)' }, '100%': { opacity: '1', transform: 'translateY(0) scale(1)' } },
+            modalFadeIn: { '0%': { opacity: '0', transform: 'scale(0.96)' }, '100%': { opacity: '1', transform: 'scale(1)' } },
+            confirmShake: { '0%, 100%': { transform: 'translateX(0)' }, '20%': { transform: 'translateX(-6px)' }, '40%': { transform: 'translateX(6px)' }, '60%': { transform: 'translateX(-4px)' }, '80%': { transform: 'translateX(4px)' } },
+            flashIn: { '0%': { opacity: '0', transform: 'translateY(-10px)' }, '100%': { opacity: '1', transform: 'translateY(0)' } },
+            flashOut: { '0%': { opacity: '1', transform: 'translateY(0)', maxHeight: '200px' }, '100%': { opacity: '0', transform: 'translateY(-10px)', maxHeight: '0px' } }
           },
           animation: {
             'fade-in-up': 'fadeInUp 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards',
@@ -866,9 +790,7 @@ if ($conn instanceof mysqli) {
 
   <div class="flex min-h-screen flex-1">
 
-    <!-- ============================================================
-         SIDEBAR
-         ============================================================ -->
+    <!-- SIDEBAR -->
     <aside class="w-20 bg-gradient-to-b from-[#4A154B] via-[#5A1B5C] to-[#006837] flex flex-col items-center py-4 shadow-2xl fixed inset-y-0 left-0 z-40">
 
       <button class="text-white/80 hover:text-white mb-8 p-2 rounded-lg hover:bg-white/10 transition-colors" aria-label="Toggle sidebar">
@@ -881,49 +803,38 @@ if ($conn instanceof mysqli) {
            class="group relative w-12 h-12 rounded-xl bg-white/10 hover:bg-white/20 flex items-center justify-center text-white transition-all hover:scale-110"
            title="Dashboard">
           <i data-lucide="home" class="w-6 h-6"></i>
-          <span class="absolute left-full ml-3 hidden group-hover:block whitespace-nowrap bg-[#4A154B] text-white text-xs px-3 py-1.5 rounded-lg shadow-lg z-50">
-            Dashboard
-          </span>
+          <span class="absolute left-full ml-3 hidden group-hover:block whitespace-nowrap bg-[#4A154B] text-white text-xs px-3 py-1.5 rounded-lg shadow-lg z-50">Dashboard</span>
         </a>
 
         <a href="profile.php"
            class="group relative w-12 h-12 rounded-xl bg-white/10 hover:bg-white/20 flex items-center justify-center text-white transition-all hover:scale-110"
            title="Profile">
           <i data-lucide="user" class="w-6 h-6"></i>
-          <span class="absolute left-full ml-3 hidden group-hover:block whitespace-nowrap bg-[#4A154B] text-white text-xs px-3 py-1.5 rounded-lg shadow-lg z-50">
-            Profile
-          </span>
+          <span class="absolute left-full ml-3 hidden group-hover:block whitespace-nowrap bg-[#4A154B] text-white text-xs px-3 py-1.5 rounded-lg shadow-lg z-50">Profile</span>
         </a>
 
         <a href="settings.php"
            class="group relative w-12 h-12 rounded-xl bg-white/10 hover:bg-white/20 flex items-center justify-center text-white transition-all hover:scale-110"
            title="Settings">
           <i data-lucide="settings" class="w-6 h-6 group-hover:rotate-90 transition-transform duration-500"></i>
-          <span class="absolute left-full ml-3 hidden group-hover:block whitespace-nowrap bg-[#4A154B] text-white text-xs px-3 py-1.5 rounded-lg shadow-lg z-50">
-            Settings
-          </span>
+          <span class="absolute left-full ml-3 hidden group-hover:block whitespace-nowrap bg-[#4A154B] text-white text-xs px-3 py-1.5 rounded-lg shadow-lg z-50">Settings</span>
         </a>
 
       </nav>
 
-      <a href="../logout.php?role=admin"
+      <a href="#" data-logout-trigger="1"
          id="sidebarLogoutBtn"
          class="group relative w-12 h-12 rounded-xl bg-white/10 hover:bg-red-500/40 flex items-center justify-center text-white transition-all hover:scale-110"
          title="Logout">
         <i data-lucide="log-out" class="w-6 h-6 group-hover:translate-x-0.5 transition-transform"></i>
-        <span class="absolute left-full ml-3 hidden group-hover:block whitespace-nowrap bg-red-600 text-white text-xs px-3 py-1.5 rounded-lg shadow-lg z-50">
-          Logout
-        </span>
+        <span class="absolute left-full ml-3 hidden group-hover:block whitespace-nowrap bg-red-600 text-white text-xs px-3 py-1.5 rounded-lg shadow-lg z-50">Logout</span>
       </a>
 
     </aside>
 
-    <!-- ============================================================
-         MAIN CONTENT
-         ============================================================ -->
+    <!-- MAIN CONTENT -->
     <div class="flex-1 ml-20 flex flex-col min-h-screen">
 
-      <!-- ============ TOP HEADER ============ -->
       <header class="bg-white border-b border-slate-200 shadow-sm sticky top-0 z-30">
         <div class="flex items-center justify-between px-6 py-4">
 
@@ -1006,7 +917,9 @@ if ($conn instanceof mysqli) {
               </a>
 
               <div class="border-t border-slate-100 mt-2 pt-2">
-                <a href="../logout.php?role=admin" id="dropdownLogoutBtn" class="flex items-center px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 transition-all duration-200 group/item">
+                <a href="#" data-logout-trigger="1"
+                   id="dropdownLogoutBtn"
+                   class="flex items-center px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 transition-all duration-200 group/item">
                   <i data-lucide="log-out" class="w-4 h-4 mr-3 group-hover/item:scale-110 transition-transform"></i>
                   <span class="font-medium">Logout</span>
                 </a>
@@ -1017,39 +930,28 @@ if ($conn instanceof mysqli) {
         </div>
       </header>
 
-      <!-- ============ PAGE CONTENT ============ -->
       <main class="flex-1 px-6 py-8">
 
-        <!-- Breadcrumb + Action Buttons -->
         <div class="max-w-6xl mx-auto mb-6 animate-fade-in-up">
           <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
 
             <div>
-              <h1 class="text-2xl md:text-3xl font-bold text-slate-800 mb-2 tracking-tight">
-                Student
-              </h1>
+              <h1 class="text-2xl md:text-3xl font-bold text-slate-800 mb-2 tracking-tight">Student</h1>
               <nav class="flex items-center space-x-2 text-sm text-slate-500">
                 <a href="dashboard.php" class="flex items-center hover:text-[#8B1E7E] transition-colors">
-                  <i data-lucide="layout-dashboard" class="w-4 h-4 mr-1"></i>
-                  Dashboard
+                  <i data-lucide="layout-dashboard" class="w-4 h-4 mr-1"></i> Dashboard
                 </a>
                 <span class="text-slate-300">/</span>
-                <a href="settings.php" class="hover:text-[#8B1E7E] transition-colors">
-                  Settings
-                </a>
+                <a href="settings.php" class="hover:text-[#8B1E7E] transition-colors">Settings</a>
                 <span class="text-slate-300">/</span>
-                <a href="classes.php" class="hover:text-[#8B1E7E] transition-colors">
-                  Course/semester
-                </a>
+                <a href="classes.php" class="hover:text-[#8B1E7E] transition-colors">Course/semester</a>
                 <span class="text-slate-300">/</span>
                 <span class="text-[#E5097F] font-semibold">Student</span>
               </nav>
             </div>
 
-            <!-- Action Buttons -->
             <div class="flex items-center gap-2">
 
-              <!-- Bulk Import (Excel/CSV) -->
               <button type="button"
                       onclick="openImportModal()"
                       title="Import Students via Excel/CSV"
@@ -1059,7 +961,6 @@ if ($conn instanceof mysqli) {
                 <i data-lucide="file-up" class="w-5 h-5"></i>
               </button>
 
-              <!-- Bulk Delete -->
               <button type="button"
                       id="bulkDeleteBtn"
                       title="Delete selected"
@@ -1069,7 +970,6 @@ if ($conn instanceof mysqli) {
                 <i data-lucide="trash-2" class="w-5 h-5"></i>
               </button>
 
-              <!-- Add Student -->
               <button type="button"
                       onclick="openStudentModal('add')"
                       title="Add Student"
@@ -1084,14 +984,12 @@ if ($conn instanceof mysqli) {
           </div>
         </div>
 
-        <!-- Class Name Sub-header -->
         <div class="max-w-6xl mx-auto mb-6 text-center animate-fade-in-up" style="animation-delay: 40ms;">
           <h2 class="text-lg md:text-xl font-bold text-slate-800">
             Class Name : <span class="text-[#8B1E7E]"><?= e($className) ?></span>
           </h2>
         </div>
 
-        <!-- Flash Messages -->
         <?php if ($flashSuccess !== ''): ?>
           <div id="flashSuccessBox"
                class="max-w-6xl mx-auto mb-6 rounded-xl border-2 border-emerald-200 bg-emerald-50 px-4 py-3 flex items-start space-x-2 animate-flash-in overflow-hidden">
@@ -1108,7 +1006,6 @@ if ($conn instanceof mysqli) {
           </div>
         <?php endif; ?>
 
-        <!-- Optional: Import skip report -->
         <?php if (!empty($importSkippedRows)): ?>
           <div class="max-w-6xl mx-auto mb-6 rounded-xl border-2 border-amber-200 bg-amber-50 px-4 py-3 animate-fade-in-up">
             <div class="flex items-start space-x-2 mb-2">
@@ -1128,7 +1025,6 @@ if ($conn instanceof mysqli) {
           </div>
         <?php endif; ?>
 
-        <!-- ============ TABLE CONTROLS ============ -->
         <div class="max-w-6xl mx-auto mb-5 animate-fade-in-up" style="animation-delay: 80ms;">
           <div class="bg-white rounded-xl shadow-sm border border-slate-200/70 px-5 py-4">
             <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -1149,9 +1045,7 @@ if ($conn instanceof mysqli) {
 
               <div class="relative w-full sm:w-80">
                 <i data-lucide="search" class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400"></i>
-                <input type="text"
-                       id="searchInput"
-                       placeholder="Search.."
+                <input type="text" id="searchInput" placeholder="Search.."
                        class="w-full pl-10 pr-4 py-2 border-2 border-slate-200 rounded-lg text-sm
                               focus:outline-none focus:border-[#4A154B] focus:ring-4 focus:ring-[#4A154B]/10
                               hover:border-[#4A154B]/40 transition-all bg-white" />
@@ -1161,7 +1055,6 @@ if ($conn instanceof mysqli) {
           </div>
         </div>
 
-        <!-- ============ DATA TABLE ============ -->
         <div class="max-w-6xl mx-auto animate-fade-in-up" style="animation-delay: 120ms;">
           <div class="bg-white rounded-2xl shadow-lg border border-slate-200/70 overflow-hidden">
 
@@ -1191,7 +1084,6 @@ if ($conn instanceof mysqli) {
                   <tbody class="divide-y divide-slate-100" id="studentsTableBody">
 
                     <?php if (empty($students)): ?>
-
                       <tr>
                         <td colspan="8" class="px-6 py-16 text-center text-slate-500">
                           <div class="flex flex-col items-center justify-center">
@@ -1205,7 +1097,6 @@ if ($conn instanceof mysqli) {
                           </div>
                         </td>
                       </tr>
-
                     <?php else: ?>
 
                       <?php foreach ($students as $index => $student): ?>
@@ -1219,24 +1110,12 @@ if ($conn instanceof mysqli) {
                           $studentUser      = (string) ($student['username']         ?? '');
                         ?>
                         <tr class="hover:bg-slate-50/80 transition-colors group">
-                          <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-slate-900">
-                            <?= $index + 1 ?>
-                          </td>
-                          <td class="px-6 py-4 whitespace-nowrap text-sm font-semibold text-[#4A154B]">
-                            <?= e($studentAdmission !== '' ? $studentAdmission : '—') ?>
-                          </td>
-                          <td class="px-6 py-4 text-sm font-semibold text-slate-800">
-                            <?= e($studentName) ?>
-                          </td>
-                          <td class="px-6 py-4 text-sm text-slate-600 max-w-[200px]">
-                            <?= e($studentAddr !== '' ? $studentAddr : '—') ?>
-                          </td>
-                          <td class="px-6 py-4 text-sm text-slate-600 break-all">
-                            <?= e($studentEmail) ?>
-                          </td>
-                          <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-600">
-                            <?= e($studentMob !== '' ? $studentMob : '—') ?>
-                          </td>
+                          <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-slate-900"><?= $index + 1 ?></td>
+                          <td class="px-6 py-4 whitespace-nowrap text-sm font-semibold text-[#4A154B]"><?= e($studentAdmission !== '' ? $studentAdmission : '—') ?></td>
+                          <td class="px-6 py-4 text-sm font-semibold text-slate-800"><?= e($studentName) ?></td>
+                          <td class="px-6 py-4 text-sm text-slate-600 max-w-[200px]"><?= e($studentAddr !== '' ? $studentAddr : '—') ?></td>
+                          <td class="px-6 py-4 text-sm text-slate-600 break-all"><?= e($studentEmail) ?></td>
+                          <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-600"><?= e($studentMob !== '' ? $studentMob : '—') ?></td>
                           <td class="px-6 py-4 whitespace-nowrap text-center">
                             <input type="checkbox"
                                    name="student_ids[]"
@@ -1246,7 +1125,6 @@ if ($conn instanceof mysqli) {
                           <td class="px-6 py-4 whitespace-nowrap">
                             <div class="flex items-center justify-center gap-1.5">
 
-                              <!-- Edit -->
                               <button type="button"
                                       title="Edit student"
                                       onclick='openStudentModal("edit", <?= $studentId ?>, <?= json_encode($studentAdmission) ?>, <?= json_encode($studentName) ?>, <?= json_encode($studentEmail) ?>, <?= json_encode($studentMob) ?>, <?= json_encode($studentAddr) ?>, <?= json_encode($studentUser) ?>)'
@@ -1256,7 +1134,6 @@ if ($conn instanceof mysqli) {
                                 <i data-lucide="pencil" class="w-3.5 h-3.5"></i>
                               </button>
 
-                              <!-- View -->
                               <button type="button"
                                       title="View details"
                                       onclick='openViewModal(<?= json_encode($studentAdmission) ?>, <?= json_encode($studentName) ?>, <?= json_encode($studentEmail) ?>, <?= json_encode($studentMob) ?>, <?= json_encode($studentAddr) ?>, <?= json_encode($studentUser) ?>)'
@@ -1266,17 +1143,16 @@ if ($conn instanceof mysqli) {
                                 <i data-lucide="eye" class="w-3.5 h-3.5"></i>
                               </button>
 
-                              <!-- Reset Password -->
+                              <!-- Set Password (replaces Reset Password) -->
                               <button type="button"
-                                      title="Reset password"
-                                      onclick='confirmResetPassword(<?= $studentId ?>, <?= json_encode($studentName) ?>)'
+                                      title="Set password"
+                                      onclick='openSetPasswordModal(<?= $studentId ?>, <?= json_encode($studentName) ?>)'
                                       class="w-8 h-8 rounded-full bg-purple-50 hover:bg-[#4A154B]
                                              flex items-center justify-center text-[#4A154B] hover:text-white
                                              transition-all duration-200 hover:scale-110">
                                 <i data-lucide="lock" class="w-3.5 h-3.5"></i>
                               </button>
 
-                              <!-- Delete -->
                               <button type="button"
                                       title="Delete student"
                                       onclick='confirmDeleteStudent(<?= $studentId ?>, <?= json_encode($studentName) ?>)'
@@ -1298,34 +1174,18 @@ if ($conn instanceof mysqli) {
               </div>
             </form>
 
-            <!-- Footer Info & Pagination -->
             <?php if (!empty($students)): ?>
               <div class="px-6 py-4 bg-slate-50/50 border-t border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-4">
-
                 <p class="text-sm text-slate-600" id="tableInfo">
                   Showing <span class="font-semibold text-slate-900">1</span> to
                   <span class="font-semibold text-slate-900"><?= count($students) ?></span> of
                   <span class="font-semibold text-slate-900"><?= count($students) ?></span> entries
                 </p>
-
                 <div class="flex items-center space-x-2">
-                  <button type="button"
-                          class="px-4 py-2 rounded-lg text-sm font-medium text-slate-500 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-                          disabled>
-                    Previous
-                  </button>
-
-                  <span class="inline-flex items-center justify-center w-9 h-9 rounded-lg bg-[#4A154B] text-white text-sm font-bold shadow-md">
-                    1
-                  </span>
-
-                  <button type="button"
-                          class="px-4 py-2 rounded-lg text-sm font-medium text-slate-500 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-                          disabled>
-                    Next
-                  </button>
+                  <button type="button" class="px-4 py-2 rounded-lg text-sm font-medium text-slate-500 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors" disabled>Previous</button>
+                  <span class="inline-flex items-center justify-center w-9 h-9 rounded-lg bg-[#4A154B] text-white text-sm font-bold shadow-md">1</span>
+                  <button type="button" class="px-4 py-2 rounded-lg text-sm font-medium text-slate-500 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors" disabled>Next</button>
                 </div>
-
               </div>
             <?php endif; ?>
 
@@ -1334,7 +1194,6 @@ if ($conn instanceof mysqli) {
 
       </main>
 
-      <!-- ============ FOOTER ============ -->
       <footer class="bg-gradient-to-r from-purple-200 via-pink-100 to-purple-200 border-t border-purple-200/60 mt-auto">
         <div class="px-6 py-6">
           <div class="max-w-7xl mx-auto text-center">
@@ -1345,9 +1204,7 @@ if ($conn instanceof mysqli) {
             </p>
             <p class="text-xs text-slate-700 mt-1">
               Powered by
-              <span class="font-bold bg-gradient-to-r from-[#4A154B] to-[#E5097F] bg-clip-text text-transparent ml-1">
-                Orell
-              </span>
+              <span class="font-bold bg-gradient-to-r from-[#4A154B] to-[#E5097F] bg-clip-text text-transparent ml-1">Orell</span>
             </p>
           </div>
         </div>
@@ -1356,14 +1213,13 @@ if ($conn instanceof mysqli) {
     </div>
   </div>
 
-  <!-- ============================================================
-       BULK IMPORT MODAL
-       ============================================================ -->
+  <!-- ============================================================ -->
+  <!-- BULK IMPORT MODAL                                            -->
+  <!-- ============================================================ -->
   <div id="importModal" class="hidden fixed inset-0 z-[60] flex items-center justify-center p-4">
     <div class="absolute inset-0 bg-black/40 backdrop-blur-sm" onclick="closeImportModal()"></div>
 
     <div class="relative w-full max-w-lg bg-white rounded-2xl shadow-2xl animate-modal-in overflow-hidden">
-
       <div class="h-1.5 w-full bg-gradient-to-r from-[#6A2C8A] via-[#8B1E7E] to-[#C43A7A]"></div>
 
       <div class="flex items-center justify-between px-6 py-4 border-b border-slate-100">
@@ -1434,37 +1290,25 @@ if ($conn instanceof mysqli) {
         </div>
 
         <div class="flex justify-center pt-2 gap-3">
-          <button type="button"
-                  onclick="closeImportModal()"
-                  class="px-6 py-3 rounded-xl font-semibold text-slate-700
-                         bg-slate-100 hover:bg-slate-200 border border-slate-200
-                         transition-all duration-200 active:scale-95">
+          <button type="button" onclick="closeImportModal()"
+                  class="px-6 py-3 rounded-xl font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-200 transition-all duration-200 active:scale-95">
             Cancel
           </button>
           <button type="submit"
-                  class="px-8 py-3 rounded-xl
-                         bg-gradient-to-r from-[#6A2C8A] via-[#8B1E7E] to-[#C43A7A]
-                         hover:from-[#5A1C7A] hover:via-[#7B0E6E] hover:to-[#B42A6A]
-                         text-white font-bold shadow-lg shadow-purple-500/30 hover:shadow-purple-500/50
-                         transition-all duration-300 hover:-translate-y-0.5 active:scale-95
-                         flex items-center gap-2">
+                  class="px-8 py-3 rounded-xl bg-gradient-to-r from-[#6A2C8A] via-[#8B1E7E] to-[#C43A7A] hover:from-[#5A1C7A] hover:via-[#7B0E6E] hover:to-[#B42A6A] text-white font-bold shadow-lg shadow-purple-500/30 hover:shadow-purple-500/50 transition-all duration-300 hover:-translate-y-0.5 active:scale-95 flex items-center gap-2">
             <i data-lucide="upload" class="w-4 h-4"></i>
             <span>Import</span>
           </button>
         </div>
       </form>
-
     </div>
   </div>
 
-  <!-- ============================================================
-       ADD / EDIT STUDENT MODAL — Enlarged, no-scroll layout
-       ============================================================ -->
+  <!-- ADD / EDIT STUDENT MODAL -->
   <div id="studentModal" class="hidden fixed inset-0 z-[60] flex items-center justify-center p-4">
     <div class="absolute inset-0 bg-black/40 backdrop-blur-sm" onclick="closeStudentModal()"></div>
 
     <div class="relative w-full max-w-2xl bg-white rounded-2xl shadow-2xl animate-modal-in overflow-hidden">
-
       <div class="h-1.5 w-full bg-gradient-to-r from-[#6A2C8A] via-[#8B1E7E] to-[#C43A7A]"></div>
 
       <div class="flex items-center justify-between px-6 py-4 border-b border-slate-100">
@@ -1479,120 +1323,72 @@ if ($conn instanceof mysqli) {
         <input type="hidden" name="action" id="formAction" value="add_student" />
         <input type="hidden" name="student_id" id="formStudentId" value="" />
 
-        <!-- Row 1: Admission Number + Full Name -->
         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div class="space-y-2">
-            <label for="admission_number" class="block text-sm font-semibold text-slate-700">
-              Admission Number <span class="text-[#E5097F]">*</span>
-            </label>
-            <input type="text" name="admission_number" id="admission_number" required
-                   placeholder="e.g. RCSS2025001"
-                   class="w-full px-4 py-3 border-2 border-slate-200 rounded-xl bg-white text-slate-800 font-medium
-                          placeholder-slate-400
+            <label for="admission_number" class="block text-sm font-semibold text-slate-700">Admission Number <span class="text-[#E5097F]">*</span></label>
+            <input type="text" name="admission_number" id="admission_number" required placeholder="e.g. RCSS2025001"
+                   class="w-full px-4 py-3 border-2 border-slate-200 rounded-xl bg-white text-slate-800 font-medium placeholder-slate-400
                           focus:outline-none focus:border-[#4A154B] focus:ring-4 focus:ring-[#4A154B]/10
                           hover:border-[#4A154B]/40 transition-all" />
           </div>
 
           <div class="space-y-2">
-            <label for="name" class="block text-sm font-semibold text-slate-700">
-              Full Name <span class="text-[#E5097F]">*</span>
-            </label>
-            <input type="text" name="name" id="name" required
-                   placeholder="e.g. John Doe"
-                   class="w-full px-4 py-3 border-2 border-slate-200 rounded-xl bg-white text-slate-800 font-medium
-                          placeholder-slate-400
+            <label for="name" class="block text-sm font-semibold text-slate-700">Full Name <span class="text-[#E5097F]">*</span></label>
+            <input type="text" name="name" id="name" required placeholder="e.g. John Doe"
+                   class="w-full px-4 py-3 border-2 border-slate-200 rounded-xl bg-white text-slate-800 font-medium placeholder-slate-400
                           focus:outline-none focus:border-[#4A154B] focus:ring-4 focus:ring-[#4A154B]/10
                           hover:border-[#4A154B]/40 transition-all" />
           </div>
         </div>
 
-        <!-- Row 2: Email + Mobile (10 digits only) -->
         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div class="space-y-2">
-            <label for="email" class="block text-sm font-semibold text-slate-700">
-              Email <span class="text-[#E5097F]">*</span>
-            </label>
-            <input type="email" name="email" id="email" required
-                   placeholder="e.g. student@rajagiri.edu"
-                   class="w-full px-4 py-3 border-2 border-slate-200 rounded-xl bg-white text-slate-800 font-medium
-                          placeholder-slate-400
+            <label for="email" class="block text-sm font-semibold text-slate-700">Email <span class="text-[#E5097F]">*</span></label>
+            <input type="email" name="email" id="email" required placeholder="e.g. student@rajagiri.edu"
+                   class="w-full px-4 py-3 border-2 border-slate-200 rounded-xl bg-white text-slate-800 font-medium placeholder-slate-400
                           focus:outline-none focus:border-[#4A154B] focus:ring-4 focus:ring-[#4A154B]/10
                           hover:border-[#4A154B]/40 transition-all" />
           </div>
 
           <div class="space-y-2">
-            <label for="contact_number" class="block text-sm font-semibold text-slate-700">
-              Mobile Number <span class="text-[#E5097F]">*</span>
-            </label>
-            <input type="tel"
-                   name="contact_number"
-                   id="contact_number"
-                   required
-                   inputmode="numeric"
-                   pattern="[0-9]{10}"
-                   minlength="10"
-                   maxlength="10"
-                   title="Please enter exactly 10 digits"
-                   placeholder="e.g. 9876543210"
-                   class="w-full px-4 py-3 border-2 border-slate-200 rounded-xl bg-white text-slate-800 font-medium
-                          placeholder-slate-400
+            <label for="contact_number" class="block text-sm font-semibold text-slate-700">Mobile Number <span class="text-[#E5097F]">*</span></label>
+            <input type="tel" name="contact_number" id="contact_number" required
+                   inputmode="numeric" pattern="[0-9]{10}" minlength="10" maxlength="10"
+                   title="Please enter exactly 10 digits" placeholder="e.g. 9876543210"
+                   class="w-full px-4 py-3 border-2 border-slate-200 rounded-xl bg-white text-slate-800 font-medium placeholder-slate-400
                           focus:outline-none focus:border-[#4A154B] focus:ring-4 focus:ring-[#4A154B]/10
                           hover:border-[#4A154B]/40 transition-all" />
             <p class="text-[11px] text-slate-500 mt-1">Enter exactly 10 digits (numbers only).</p>
           </div>
         </div>
 
-        <!-- Row 3: Address (full width, 2 rows) -->
         <div class="space-y-2">
-          <label for="address" class="block text-sm font-semibold text-slate-700">
-            Address
-          </label>
-          <textarea name="address" id="address" rows="2"
-                    placeholder="e.g. Kochi, Kerala"
-                    class="w-full px-4 py-3 border-2 border-slate-200 rounded-xl bg-white text-slate-800 font-medium
-                           placeholder-slate-400 resize-none
+          <label for="address" class="block text-sm font-semibold text-slate-700">Address</label>
+          <textarea name="address" id="address" rows="2" placeholder="e.g. Kochi, Kerala"
+                    class="w-full px-4 py-3 border-2 border-slate-200 rounded-xl bg-white text-slate-800 font-medium placeholder-slate-400 resize-none
                            focus:outline-none focus:border-[#4A154B] focus:ring-4 focus:ring-[#4A154B]/10
                            hover:border-[#4A154B]/40 transition-all"></textarea>
         </div>
 
-        <!-- Row 4: Username + Password (with show/hide toggle) -->
         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div class="space-y-2">
-            <label for="username" class="block text-sm font-semibold text-slate-700">
-              Username <span class="text-[#E5097F]">*</span>
-            </label>
-            <input type="text" name="username" id="username" required
-                   placeholder="e.g. johndoe"
-                   class="w-full px-4 py-3 border-2 border-slate-200 rounded-xl bg-white text-slate-800 font-medium
-                          placeholder-slate-400
+            <label for="username" class="block text-sm font-semibold text-slate-700">Username <span class="text-[#E5097F]">*</span></label>
+            <input type="text" name="username" id="username" required placeholder="e.g. johndoe"
+                   class="w-full px-4 py-3 border-2 border-slate-200 rounded-xl bg-white text-slate-800 font-medium placeholder-slate-400
                           focus:outline-none focus:border-[#4A154B] focus:ring-4 focus:ring-[#4A154B]/10
                           hover:border-[#4A154B]/40 transition-all" />
           </div>
 
           <div class="space-y-2" id="passwordFieldWrapper">
-            <label for="password" class="block text-sm font-semibold text-slate-700">
-              Password <span class="text-[#E5097F]">*</span>
-            </label>
+            <label for="password" class="block text-sm font-semibold text-slate-700">Password <span class="text-[#E5097F]">*</span></label>
             <div class="relative">
-              <input type="password" name="password" id="password"
-                     placeholder="e.g. Student@123"
-                     class="w-full pl-4 pr-12 py-3 border-2 border-slate-200 rounded-xl bg-white text-slate-800 font-medium
-                            placeholder-slate-400
+              <input type="password" name="password" id="password" placeholder="e.g. Student@123"
+                     class="w-full pl-4 pr-12 py-3 border-2 border-slate-200 rounded-xl bg-white text-slate-800 font-medium placeholder-slate-400
                             focus:outline-none focus:border-[#4A154B] focus:ring-4 focus:ring-[#4A154B]/10
                             hover:border-[#4A154B]/40 transition-all" />
-
-              <!-- Show/Hide password toggle -->
-              <button type="button"
-                      id="togglePasswordBtn"
-                      title="Show password"
-                      aria-label="Show password"
-                      tabindex="-1"
-                      class="absolute right-2 top-1/2 -translate-y-1/2
-                             w-9 h-9 rounded-lg
-                             flex items-center justify-center
-                             text-slate-400 hover:text-[#8B1E7E]
-                             hover:bg-purple-50
-                             transition-all duration-200 active:scale-95">
+              <button type="button" id="togglePasswordBtn" title="Show password" aria-label="Show password" tabindex="-1"
+                      class="absolute right-2 top-1/2 -translate-y-1/2 w-9 h-9 rounded-lg flex items-center justify-center
+                             text-slate-400 hover:text-[#8B1E7E] hover:bg-purple-50 transition-all duration-200 active:scale-95">
                 <i data-lucide="eye" id="togglePasswordIcon" class="w-5 h-5"></i>
               </button>
             </div>
@@ -1600,35 +1396,24 @@ if ($conn instanceof mysqli) {
         </div>
 
         <div class="flex justify-center pt-3 gap-3">
-          <button type="button"
-                  onclick="closeStudentModal()"
-                  class="px-6 py-3 rounded-xl font-semibold text-slate-700
-                         bg-slate-100 hover:bg-slate-200 border border-slate-200
-                         transition-all duration-200 active:scale-95">
+          <button type="button" onclick="closeStudentModal()"
+                  class="px-6 py-3 rounded-xl font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-200 transition-all duration-200 active:scale-95">
             Cancel
           </button>
           <button type="submit"
-                  class="px-8 py-3 rounded-xl
-                         bg-gradient-to-r from-[#6A2C8A] via-[#8B1E7E] to-[#C43A7A]
-                         hover:from-[#5A1C7A] hover:via-[#7B0E6E] hover:to-[#B42A6A]
-                         text-white font-bold shadow-lg shadow-purple-500/30 hover:shadow-purple-500/50
-                         transition-all duration-300 hover:-translate-y-0.5 active:scale-95">
+                  class="px-8 py-3 rounded-xl bg-gradient-to-r from-[#6A2C8A] via-[#8B1E7E] to-[#C43A7A] hover:from-[#5A1C7A] hover:via-[#7B0E6E] hover:to-[#B42A6A] text-white font-bold shadow-lg shadow-purple-500/30 hover:shadow-purple-500/50 transition-all duration-300 hover:-translate-y-0.5 active:scale-95">
             Save
           </button>
         </div>
       </form>
-
     </div>
   </div>
 
-  <!-- ============================================================
-       VIEW STUDENT MODAL
-       ============================================================ -->
+  <!-- VIEW STUDENT MODAL -->
   <div id="viewModal" class="hidden fixed inset-0 z-[60] flex items-center justify-center p-4">
     <div class="absolute inset-0 bg-black/40 backdrop-blur-sm" onclick="closeViewModal()"></div>
 
     <div class="relative w-full max-w-md bg-white rounded-2xl shadow-2xl animate-modal-in overflow-hidden">
-
       <div class="h-1.5 w-full bg-gradient-to-r from-[#6A2C8A] via-[#8B1E7E] to-[#C43A7A]"></div>
 
       <div class="flex items-center justify-between px-6 py-4 border-b border-slate-100">
@@ -1640,7 +1425,6 @@ if ($conn instanceof mysqli) {
       </div>
 
       <div class="p-6 space-y-4">
-
         <div class="flex items-center space-x-4 pb-4 border-b border-slate-100">
           <div class="w-14 h-14 rounded-full bg-gradient-to-br from-[#4A154B] to-[#8B1E7E] flex items-center justify-center text-white shadow-md">
             <i data-lucide="user" class="w-7 h-7"></i>
@@ -1659,7 +1443,6 @@ if ($conn instanceof mysqli) {
               <p id="viewAdmission" class="text-sm text-slate-700 break-all">—</p>
             </div>
           </div>
-
           <div class="flex items-start gap-3">
             <i data-lucide="mail" class="w-4 h-4 text-[#8B1E7E] mt-1 flex-shrink-0"></i>
             <div class="min-w-0">
@@ -1667,7 +1450,6 @@ if ($conn instanceof mysqli) {
               <p id="viewEmail" class="text-sm text-slate-700 break-all">—</p>
             </div>
           </div>
-
           <div class="flex items-start gap-3">
             <i data-lucide="phone" class="w-4 h-4 text-[#8B1E7E] mt-1 flex-shrink-0"></i>
             <div class="min-w-0">
@@ -1675,7 +1457,6 @@ if ($conn instanceof mysqli) {
               <p id="viewMobile" class="text-sm text-slate-700">—</p>
             </div>
           </div>
-
           <div class="flex items-start gap-3">
             <i data-lucide="map-pin" class="w-4 h-4 text-[#8B1E7E] mt-1 flex-shrink-0"></i>
             <div class="min-w-0">
@@ -1684,43 +1465,34 @@ if ($conn instanceof mysqli) {
             </div>
           </div>
         </div>
-
       </div>
 
       <div class="px-6 py-4 bg-slate-50 border-t border-slate-100 flex justify-end">
         <button type="button" onclick="closeViewModal()"
-                class="px-5 py-2.5 rounded-xl font-semibold text-slate-700
-                       bg-white hover:bg-slate-100 border border-slate-200
-                       transition-all duration-200 active:scale-95">
+                class="px-5 py-2.5 rounded-xl font-semibold text-slate-700 bg-white hover:bg-slate-100 border border-slate-200 transition-all duration-200 active:scale-95">
           Close
         </button>
       </div>
-
     </div>
   </div>
 
-  <!-- ============================================================= -->
-  <!-- CUSTOM DELETE CONFIRMATION MODAL                              -->
-  <!-- ============================================================= -->
+  <!-- DELETE CONFIRMATION MODAL -->
   <div id="deleteConfirmModal" class="hidden fixed inset-0 z-[70] flex items-center justify-center p-4">
     <div class="absolute inset-0 bg-black/50 backdrop-blur-sm" onclick="closeDeleteModal()"></div>
 
     <div id="deleteConfirmPanel"
          class="relative w-full max-w-md bg-white rounded-2xl shadow-2xl animate-modal-in overflow-hidden">
-
       <div class="h-1.5 w-full bg-gradient-to-r from-[#6A2C8A] via-[#8B1E7E] to-[#C43A7A]"></div>
 
       <div class="px-6 pt-6 pb-2 flex flex-col items-center text-center">
-        <div class="w-16 h-16 rounded-full flex items-center justify-center mb-4
-                    bg-gradient-to-br from-red-100 to-pink-100 ring-4 ring-red-50">
+        <div class="w-16 h-16 rounded-full flex items-center justify-center mb-4 bg-gradient-to-br from-red-100 to-pink-100 ring-4 ring-red-50">
           <i data-lucide="trash-2" class="w-8 h-8 text-red-500"></i>
         </div>
 
         <h3 id="deleteModalTitle" class="text-xl font-bold text-slate-800 mb-2">Delete Student?</h3>
 
         <p id="deleteModalDescription" class="text-sm text-slate-500 leading-relaxed">
-          You are about to permanently delete
-          <span class="font-bold text-[#8B1E7E] break-words">this student</span>.
+          You are about to permanently delete <span class="font-bold text-[#8B1E7E] break-words">this student</span>.
         </p>
 
         <p class="text-xs text-red-500 font-medium mt-3 flex items-center gap-1.5">
@@ -1730,83 +1502,142 @@ if ($conn instanceof mysqli) {
       </div>
 
       <div class="px-6 py-5 mt-2 flex flex-col-reverse sm:flex-row gap-3">
-        <button type="button"
-                onclick="closeDeleteModal()"
-                class="flex-1 px-5 py-3 rounded-xl font-semibold text-slate-700
-                       bg-slate-100 hover:bg-slate-200 border border-slate-200
-                       transition-all duration-200 active:scale-95">
+        <button type="button" onclick="closeDeleteModal()"
+                class="flex-1 px-5 py-3 rounded-xl font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-200 transition-all duration-200 active:scale-95">
           Cancel
         </button>
-
-        <button type="button"
-                id="confirmDeleteBtn"
-                class="flex-1 px-5 py-3 rounded-xl font-bold text-white
-                       bg-gradient-to-r from-red-500 via-red-600 to-rose-600
-                       hover:from-red-600 hover:via-red-700 hover:to-rose-700
-                       shadow-lg shadow-red-500/30 hover:shadow-red-500/50
-                       transition-all duration-300 hover:-translate-y-0.5 active:scale-95
-                       flex items-center justify-center gap-2">
+        <button type="button" id="confirmDeleteBtn"
+                class="flex-1 px-5 py-3 rounded-xl font-bold text-white bg-gradient-to-r from-red-500 via-red-600 to-rose-600 hover:from-red-600 hover:via-red-700 hover:to-rose-700 shadow-lg shadow-red-500/30 hover:shadow-red-500/50 transition-all duration-300 hover:-translate-y-0.5 active:scale-95 flex items-center justify-center gap-2">
           <i data-lucide="trash-2" class="w-4 h-4"></i>
           <span>Delete</span>
         </button>
       </div>
-
     </div>
   </div>
 
   <!-- ============================================================= -->
-  <!-- CUSTOM RESET PASSWORD CONFIRMATION MODAL                      -->
+  <!-- SET PASSWORD MODAL (replaces Reset Password)                  -->
   <!-- ============================================================= -->
-  <div id="resetConfirmModal" class="hidden fixed inset-0 z-[70] flex items-center justify-center p-4">
-    <div class="absolute inset-0 bg-black/50 backdrop-blur-sm" onclick="closeResetModal()"></div>
+  <div id="setPasswordModal" class="hidden fixed inset-0 z-[70] flex items-center justify-center p-4">
+    <div class="absolute inset-0 bg-black/50 backdrop-blur-sm" onclick="closeSetPasswordModal()"></div>
 
-    <div id="resetConfirmPanel"
+    <div id="setPasswordPanel"
          class="relative w-full max-w-md bg-white rounded-2xl shadow-2xl animate-modal-in overflow-hidden">
 
       <div class="h-1.5 w-full bg-gradient-to-r from-[#6A2C8A] via-[#8B1E7E] to-[#C43A7A]"></div>
 
-      <div class="px-6 pt-6 pb-2 flex flex-col items-center text-center">
-        <div class="w-16 h-16 rounded-full flex items-center justify-center mb-4
-                    bg-gradient-to-br from-purple-100 to-pink-100 ring-4 ring-purple-50">
-          <i data-lucide="lock" class="w-8 h-8 text-[#8B1E7E]"></i>
+      <div class="flex items-center justify-between px-6 py-4 border-b border-slate-100">
+        <div class="flex items-center gap-3">
+          <div class="w-9 h-9 rounded-lg bg-purple-50 flex items-center justify-center">
+            <i data-lucide="lock" class="w-5 h-5 text-[#8B1E7E]"></i>
+          </div>
+          <h3 class="text-lg font-bold text-slate-800">Set Password</h3>
         </div>
+        <button type="button" onclick="closeSetPasswordModal()"
+                class="w-8 h-8 rounded-lg hover:bg-slate-100 flex items-center justify-center text-slate-500 transition-colors">
+          <i data-lucide="x" class="w-5 h-5"></i>
+        </button>
+      </div>
 
-        <h3 class="text-xl font-bold text-slate-800 mb-2">Reset Password?</h3>
+      <form id="setPasswordForm" method="POST" action="students.php?class_id=<?= (int) $classId ?>" class="p-6 space-y-4">
+        <input type="hidden" name="action" value="set_password" />
+        <input type="hidden" name="student_id" id="setPasswordStudentId" value="" />
 
-        <p class="text-sm text-slate-500 leading-relaxed">
-          A new random password will be generated for
-          <span id="resetStudentNameDisplay"
-                class="font-bold text-[#8B1E7E] break-words">this student</span>.
+        <p class="text-sm text-slate-600">
+          Set a new password for
+          <span id="setPasswordStudentName" class="font-bold text-[#8B1E7E]">this student</span>.
         </p>
 
-        <p class="text-xs text-[#8B1E7E] font-medium mt-3 flex items-center gap-1.5">
-          <i data-lucide="info" class="w-3.5 h-3.5"></i>
-          The new password will be shown after reset.
+        <div class="space-y-2">
+          <label for="new_password" class="block text-sm font-semibold text-slate-700">
+            New Password <span class="text-[#E5097F]">*</span>
+          </label>
+          <div class="relative">
+            <input type="password" name="new_password" id="new_password" required minlength="6"
+                   placeholder="Enter new password"
+                   class="w-full pl-4 pr-12 py-3 border-2 border-slate-200 rounded-xl bg-white text-slate-800 font-medium placeholder-slate-400
+                          focus:outline-none focus:border-[#4A154B] focus:ring-4 focus:ring-[#4A154B]/10
+                          hover:border-[#4A154B]/40 transition-all" />
+            <button type="button" id="toggleNewPasswordBtn" title="Show password" aria-label="Show password" tabindex="-1"
+                    class="absolute right-2 top-1/2 -translate-y-1/2 w-9 h-9 rounded-lg flex items-center justify-center
+                           text-slate-400 hover:text-[#8B1E7E] hover:bg-purple-50 transition-all duration-200 active:scale-95">
+              <i data-lucide="eye" id="toggleNewPasswordIcon" class="w-5 h-5"></i>
+            </button>
+          </div>
+          <p class="text-[11px] text-slate-500 mt-1">Minimum 6 characters.</p>
+        </div>
+
+        <div class="space-y-2">
+          <label for="confirm_password" class="block text-sm font-semibold text-slate-700">
+            Confirm Password <span class="text-[#E5097F]">*</span>
+          </label>
+          <div class="relative">
+            <input type="password" name="confirm_password" id="confirm_password" required minlength="6"
+                   placeholder="Re-enter new password"
+                   class="w-full pl-4 pr-12 py-3 border-2 border-slate-200 rounded-xl bg-white text-slate-800 font-medium placeholder-slate-400
+                          focus:outline-none focus:border-[#4A154B] focus:ring-4 focus:ring-[#4A154B]/10
+                          hover:border-[#4A154B]/40 transition-all" />
+            <button type="button" id="toggleConfirmPasswordBtn" title="Show password" aria-label="Show password" tabindex="-1"
+                    class="absolute right-2 top-1/2 -translate-y-1/2 w-9 h-9 rounded-lg flex items-center justify-center
+                           text-slate-400 hover:text-[#8B1E7E] hover:bg-purple-50 transition-all duration-200 active:scale-95">
+              <i data-lucide="eye" id="toggleConfirmPasswordIcon" class="w-5 h-5"></i>
+            </button>
+          </div>
+          <p id="setPasswordMatchHint" class="text-[11px] mt-1 hidden"></p>
+        </div>
+
+        <div class="flex justify-center pt-3 gap-3">
+          <button type="button" onclick="closeSetPasswordModal()"
+                  class="px-6 py-3 rounded-xl font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-200 transition-all duration-200 active:scale-95">
+            Cancel
+          </button>
+          <button type="submit"
+                  class="px-8 py-3 rounded-xl bg-gradient-to-r from-[#6A2C8A] via-[#8B1E7E] to-[#C43A7A] hover:from-[#5A1C7A] hover:via-[#7B0E6E] hover:to-[#B42A6A] text-white font-bold shadow-lg shadow-purple-500/30 hover:shadow-purple-500/50 transition-all duration-300 hover:-translate-y-0.5 active:scale-95 flex items-center gap-2">
+            <i data-lucide="save" class="w-4 h-4"></i>
+            <span>Save Password</span>
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ============================================================= -->
+  <!-- LOGOUT CONFIRMATION MODAL                                     -->
+  <!-- ============================================================= -->
+  <div id="logoutConfirmModal" class="hidden fixed inset-0 z-[70] flex items-center justify-center p-4">
+    <div class="absolute inset-0 bg-black/50 backdrop-blur-sm" onclick="closeLogoutModal()"></div>
+
+    <div id="logoutConfirmPanel" class="relative w-full max-w-md bg-white rounded-2xl shadow-2xl animate-modal-in overflow-hidden">
+      <div class="h-1.5 w-full bg-gradient-to-r from-[#6A2C8A] via-[#8B1E7E] to-[#C43A7A]"></div>
+
+      <div class="px-6 pt-6 pb-2 flex flex-col items-center text-center">
+        <div class="w-16 h-16 rounded-full flex items-center justify-center mb-4 bg-gradient-to-br from-red-100 to-pink-100 ring-4 ring-red-50">
+          <i data-lucide="log-out" class="w-8 h-8 text-red-500"></i>
+        </div>
+
+        <h3 class="text-xl font-bold text-slate-800 mb-2">Log Out?</h3>
+
+        <p class="text-sm text-slate-500 leading-relaxed">
+          You are about to log out of <span class="font-bold text-[#8B1E7E] break-words"><?= e($displayName) ?></span>.
+          Any unsaved changes will be lost.
+        </p>
+
+        <p class="text-xs text-slate-400 font-medium mt-3 flex items-center gap-1.5">
+          <i data-lucide="info" class="w-3.5 h-3.5"></i> You can log back in anytime.
         </p>
       </div>
 
       <div class="px-6 py-5 mt-2 flex flex-col-reverse sm:flex-row gap-3">
-        <button type="button"
-                onclick="closeResetModal()"
-                class="flex-1 px-5 py-3 rounded-xl font-semibold text-slate-700
-                       bg-slate-100 hover:bg-slate-200 border border-slate-200
-                       transition-all duration-200 active:scale-95">
+        <button type="button" onclick="closeLogoutModal()"
+                class="flex-1 px-5 py-3 rounded-xl font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-200 transition-all duration-200 active:scale-95">
           Cancel
         </button>
-
-        <button type="button"
-                id="confirmResetBtn"
-                class="flex-1 px-5 py-3 rounded-xl font-bold text-white
-                       bg-gradient-to-r from-[#6A2C8A] via-[#8B1E7E] to-[#C43A7A]
-                       hover:from-[#5A1C7A] hover:via-[#7B0E6E] hover:to-[#B42A6A]
-                       shadow-lg shadow-purple-500/30 hover:shadow-purple-500/50
-                       transition-all duration-300 hover:-translate-y-0.5 active:scale-95
-                       flex items-center justify-center gap-2">
-          <i data-lucide="refresh-cw" class="w-4 h-4"></i>
-          <span>Reset Password</span>
+        <button type="button" id="confirmLogoutBtn"
+                class="flex-1 px-5 py-3 rounded-xl font-bold text-white bg-gradient-to-r from-red-500 via-red-600 to-rose-600 hover:from-red-600 hover:via-red-700 hover:to-rose-700 shadow-lg shadow-red-500/30 hover:shadow-red-500/50 transition-all duration-300 hover:-translate-y-0.5 active:scale-95 flex items-center justify-center gap-2">
+          <i data-lucide="log-out" class="w-4 h-4"></i>
+          <span>Log Out</span>
         </button>
       </div>
-
     </div>
   </div>
 
@@ -1816,383 +1647,215 @@ if ($conn instanceof mysqli) {
     <input type="hidden" name="student_id" id="deleteStudentId" value="" />
   </form>
 
-  <form id="resetForm" method="POST" action="students.php?class_id=<?= (int) $classId ?>" class="hidden">
-    <input type="hidden" name="action" value="reset_password" />
-    <input type="hidden" name="student_id" id="resetStudentId" value="" />
-  </form>
-
   <script>
-    if (typeof lucide !== 'undefined') {
-      lucide.createIcons();
-    }
-
-    // ---- Auto-dismiss flash messages after 3 seconds ----
-    (function () {
-      const flashBoxes = [
-        document.getElementById('flashSuccessBox'),
-        document.getElementById('flashErrorBox'),
-      ];
-
-      flashBoxes.forEach(function (box) {
-        if (!box) return;
-
-        setTimeout(function () {
-          box.classList.remove('animate-flash-in');
-          box.classList.add('animate-flash-out');
-
-          setTimeout(function () {
-            if (box && box.parentNode) {
-              box.parentNode.removeChild(box);
-            }
-          }, 500);
-        }, 3000);
-      });
-    })();
-
-    // ---- Admin profile dropdown ----
-    (function () {
-      const btn       = document.getElementById('admin-dropdown-btn');
-      const menu      = document.getElementById('admin-dropdown-menu');
-      const chevron   = document.getElementById('admin-chevron');
-      const container = document.getElementById('admin-dropdown-container');
-
-      if (!btn || !menu || !container) return;
-
-      btn.addEventListener('click', function (e) {
-        e.stopPropagation();
-        const isOpen = !menu.classList.contains('hidden');
-        if (isOpen) {
-          menu.classList.add('hidden');
-          menu.classList.remove('animate-dropdown');
-          if (chevron) chevron.classList.remove('rotate-180');
-          btn.setAttribute('aria-expanded', 'false');
-        } else {
-          menu.classList.remove('hidden');
-          menu.classList.add('animate-dropdown');
-          if (chevron) chevron.classList.add('rotate-180');
-          btn.setAttribute('aria-expanded', 'true');
-        }
-      });
-
-      document.addEventListener('click', function (e) {
-        if (!container.contains(e.target)) {
-          menu.classList.add('hidden');
-          menu.classList.remove('animate-dropdown');
-          if (chevron) chevron.classList.remove('rotate-180');
-          btn.setAttribute('aria-expanded', 'false');
-        }
-      });
-
-      document.addEventListener('keydown', function (e) {
-        if (e.key === 'Escape') {
-          menu.classList.add('hidden');
-          menu.classList.remove('animate-dropdown');
-          if (chevron) chevron.classList.remove('rotate-180');
-          btn.setAttribute('aria-expanded', 'false');
-        }
-      });
-    })();
-
-    // ---- Logout confirmation ----
-    (function () {
-      const logoutButtons = [
-        document.getElementById('sidebarLogoutBtn'),
-        document.getElementById('dropdownLogoutBtn'),
-      ];
-      logoutButtons.forEach(function (btn) {
-        if (!btn) return;
-        btn.addEventListener('click', function (e) {
-          const confirmed = window.confirm('Are you sure you want to log out?');
-          if (!confirmed) {
-            e.preventDefault();
-            e.stopPropagation();
-            return false;
-          }
-          btn.classList.add('opacity-50', 'pointer-events-none');
-        });
-      });
-    })();
-
-    // ---- Import Modal ----
-    const importModal = document.getElementById('importModal');
-    const importForm  = document.getElementById('importForm');
-
-    function openImportModal() {
-      importModal.classList.remove('hidden');
-      document.body.classList.add('overflow-hidden');
-
-      setTimeout(function () {
-        const fileInput = document.getElementById('import_file');
-        if (fileInput) fileInput.focus();
-      }, 80);
-
-      if (typeof lucide !== 'undefined') lucide.createIcons();
-    }
-
-    function closeImportModal() {
-      importModal.classList.add('hidden');
-      document.body.classList.remove('overflow-hidden');
-      if (importForm) importForm.reset();
-    }
-
-    document.addEventListener('keydown', function (e) {
-      if (e.key === 'Escape' && importModal && !importModal.classList.contains('hidden')) {
-        closeImportModal();
-      }
-    });
-
-    // ---- Student Add/Edit Modal ----
-    const studentModal       = document.getElementById('studentModal');
-    const studentModalTitle  = document.getElementById('studentModalTitle');
-    const studentForm        = document.getElementById('studentForm');
-    const formAction         = document.getElementById('formAction');
-    const formStudentId      = document.getElementById('formStudentId');
-    const admissionInput     = document.getElementById('admission_number');
-    const nameInput          = document.getElementById('name');
-    const emailInput         = document.getElementById('email');
-    const mobileInput        = document.getElementById('contact_number');
-    const addressInput       = document.getElementById('address');
-    const usernameInput      = document.getElementById('username');
-    const passwordInput      = document.getElementById('password');
-    const passwordWrapper    = document.getElementById('passwordFieldWrapper');
-    const togglePasswordBtn  = document.getElementById('togglePasswordBtn');
-    const togglePasswordIcon = document.getElementById('togglePasswordIcon');
-
-    // ---- Mobile number: allow only digits (10 max) ----
-    if (mobileInput) {
-      mobileInput.addEventListener('input', function () {
-        // Strip any non-digit character
-        this.value = this.value.replace(/\D/g, '').slice(0, 10);
-      });
-
-      mobileInput.addEventListener('keypress', function (e) {
-        // Block non-digit keypresses (allows control keys like Backspace, Tab, arrows)
-        const charCode = e.which ? e.which : e.keyCode;
-        if (charCode < 48 || charCode > 57) {
-          // Allow: Backspace(8), Tab(9), Enter(13), Escape(27), Arrow keys (37-40), Delete(46)
-          if (![8, 9, 13, 27, 37, 38, 39, 40, 46].includes(charCode)) {
-            e.preventDefault();
-          }
-        }
-      });
-    }
-
-    // ---- Password Show/Hide Toggle ----
-    function resetPasswordToggleState() {
-      if (!passwordInput || !togglePasswordBtn || !togglePasswordIcon) return;
-
-      passwordInput.type = 'password';
-      togglePasswordBtn.setAttribute('title', 'Show password');
-      togglePasswordBtn.setAttribute('aria-label', 'Show password');
-
-      togglePasswordIcon.setAttribute('data-lucide', 'eye');
+    document.addEventListener('DOMContentLoaded', function () {
 
       if (typeof lucide !== 'undefined') {
         lucide.createIcons();
       }
-    }
 
-    if (togglePasswordBtn && passwordInput) {
-      togglePasswordBtn.addEventListener('click', function () {
-        const currentlyHidden = (passwordInput.type === 'password');
+      // ---- Auto-dismiss flash messages after 3 seconds ----
+      (function () {
+        ['flashSuccessBox', 'flashErrorBox'].forEach(function (id) {
+          const box = document.getElementById(id);
+          if (!box) return;
+          setTimeout(function () {
+            box.classList.remove('animate-flash-in');
+            box.classList.add('animate-flash-out');
+            setTimeout(function () { if (box.parentNode) box.parentNode.removeChild(box); }, 500);
+          }, 3000);
+        });
+      })();
 
-        if (currentlyHidden) {
-          passwordInput.type = 'text';
-          togglePasswordBtn.setAttribute('title', 'Hide password');
-          togglePasswordBtn.setAttribute('aria-label', 'Hide password');
-          if (togglePasswordIcon) togglePasswordIcon.setAttribute('data-lucide', 'eye-off');
+      // ---- Admin profile dropdown ----
+      (function () {
+        const btn       = document.getElementById('admin-dropdown-btn');
+        const menu      = document.getElementById('admin-dropdown-menu');
+        const chevron   = document.getElementById('admin-chevron');
+        const container = document.getElementById('admin-dropdown-container');
+        if (!btn || !menu || !container) return;
+
+        btn.addEventListener('click', function (e) {
+          e.stopPropagation();
+          const isOpen = !menu.classList.contains('hidden');
+          if (isOpen) {
+            menu.classList.add('hidden'); menu.classList.remove('animate-dropdown');
+            if (chevron) chevron.classList.remove('rotate-180');
+            btn.setAttribute('aria-expanded', 'false');
+          } else {
+            menu.classList.remove('hidden'); menu.classList.add('animate-dropdown');
+            if (chevron) chevron.classList.add('rotate-180');
+            btn.setAttribute('aria-expanded', 'true');
+          }
+        });
+
+        document.addEventListener('click', function (e) {
+          if (!container.contains(e.target)) {
+            menu.classList.add('hidden'); menu.classList.remove('animate-dropdown');
+            if (chevron) chevron.classList.remove('rotate-180');
+            btn.setAttribute('aria-expanded', 'false');
+          }
+        });
+
+        document.addEventListener('keydown', function (e) {
+          if (e.key === 'Escape') {
+            menu.classList.add('hidden'); menu.classList.remove('animate-dropdown');
+            if (chevron) chevron.classList.remove('rotate-180');
+            btn.setAttribute('aria-expanded', 'false');
+          }
+        });
+      })();
+
+      // ---- Import Modal ----
+      const importModal = document.getElementById('importModal');
+      const importForm  = document.getElementById('importForm');
+
+      window.openImportModal = function () {
+        importModal.classList.remove('hidden');
+        document.body.classList.add('overflow-hidden');
+        setTimeout(function () { const f = document.getElementById('import_file'); if (f) f.focus(); }, 80);
+        if (typeof lucide !== 'undefined') lucide.createIcons();
+      };
+      window.closeImportModal = function () {
+        importModal.classList.add('hidden');
+        document.body.classList.remove('overflow-hidden');
+        if (importForm) importForm.reset();
+      };
+
+      // ---- Student Add/Edit Modal ----
+      const studentModal       = document.getElementById('studentModal');
+      const studentModalTitle  = document.getElementById('studentModalTitle');
+      const studentForm        = document.getElementById('studentForm');
+      const formAction         = document.getElementById('formAction');
+      const formStudentId      = document.getElementById('formStudentId');
+      const admissionInput     = document.getElementById('admission_number');
+      const nameInput          = document.getElementById('name');
+      const emailInput         = document.getElementById('email');
+      const mobileInput        = document.getElementById('contact_number');
+      const addressInput       = document.getElementById('address');
+      const usernameInput      = document.getElementById('username');
+      const passwordInput      = document.getElementById('password');
+      const passwordWrapper    = document.getElementById('passwordFieldWrapper');
+      const togglePasswordBtn  = document.getElementById('togglePasswordBtn');
+      const togglePasswordIcon = document.getElementById('togglePasswordIcon');
+
+      // Mobile number: digits only
+      if (mobileInput) {
+        mobileInput.addEventListener('input', function () {
+          this.value = this.value.replace(/\D/g, '').slice(0, 10);
+        });
+        mobileInput.addEventListener('keypress', function (e) {
+          const charCode = e.which ? e.which : e.keyCode;
+          if (charCode < 48 || charCode > 57) {
+            if (![8, 9, 13, 27, 37, 38, 39, 40, 46].includes(charCode)) e.preventDefault();
+          }
+        });
+      }
+
+      // Password show/hide toggle helper
+      function wireToggle(btnId, iconId, inputEl) {
+        const btn = document.getElementById(btnId);
+        const ic  = document.getElementById(iconId);
+        if (!btn || !ic || !inputEl) return;
+
+        btn.addEventListener('click', function () {
+          const isHidden = (inputEl.type === 'password');
+          inputEl.type = isHidden ? 'text' : 'password';
+          ic.setAttribute('data-lucide', isHidden ? 'eye-off' : 'eye');
+          btn.setAttribute('title', isHidden ? 'Hide password' : 'Show password');
+          btn.setAttribute('aria-label', isHidden ? 'Hide password' : 'Show password');
+          if (typeof lucide !== 'undefined') lucide.createIcons();
+          inputEl.focus();
+        });
+      }
+      wireToggle('togglePasswordBtn', 'togglePasswordIcon', passwordInput);
+
+      function resetPasswordToggleState() {
+        if (!passwordInput || !togglePasswordBtn || !togglePasswordIcon) return;
+        passwordInput.type = 'password';
+        togglePasswordBtn.setAttribute('title', 'Show password');
+        togglePasswordBtn.setAttribute('aria-label', 'Show password');
+        togglePasswordIcon.setAttribute('data-lucide', 'eye');
+        if (typeof lucide !== 'undefined') lucide.createIcons();
+      }
+
+      window.openStudentModal = function (mode, studentId, admission, name, email, mobile, address, username) {
+        studentModal.classList.remove('hidden');
+
+        if (mode === 'edit') {
+          studentModalTitle.textContent = 'Edit Student';
+          formAction.value     = 'edit_student';
+          formStudentId.value  = studentId || '';
+          admissionInput.value = admission || '';
+          nameInput.value      = name      || '';
+          emailInput.value     = email     || '';
+          mobileInput.value    = mobile    || '';
+          addressInput.value   = address   || '';
+          usernameInput.value  = username  || '';
+
+          if (passwordWrapper) passwordWrapper.style.display = 'none';
+          if (passwordInput) { passwordInput.removeAttribute('required'); passwordInput.value = ''; }
         } else {
-          passwordInput.type = 'password';
-          togglePasswordBtn.setAttribute('title', 'Show password');
-          togglePasswordBtn.setAttribute('aria-label', 'Show password');
-          if (togglePasswordIcon) togglePasswordIcon.setAttribute('data-lucide', 'eye');
+          studentModalTitle.textContent = 'Add Student';
+          formAction.value    = 'add_student';
+          formStudentId.value = '';
+          studentForm.reset();
+
+          if (passwordWrapper) passwordWrapper.style.display = '';
+          if (passwordInput) passwordInput.setAttribute('required', 'required');
         }
 
-        if (typeof lucide !== 'undefined') {
-          lucide.createIcons();
-        }
+        resetPasswordToggleState();
+        setTimeout(() => admissionInput && admissionInput.focus(), 50);
+        if (typeof lucide !== 'undefined') lucide.createIcons();
+      };
 
-        passwordInput.focus();
-      });
-    }
-
-    function openStudentModal(mode, studentId, admission, name, email, mobile, address, username) {
-      studentModal.classList.remove('hidden');
-
-      if (mode === 'edit') {
-        studentModalTitle.textContent = 'Edit Student';
-        formAction.value     = 'edit_student';
-        formStudentId.value  = studentId || '';
-        admissionInput.value = admission || '';
-        nameInput.value      = name      || '';
-        emailInput.value     = email     || '';
-        mobileInput.value    = mobile    || '';
-        addressInput.value   = address   || '';
-        usernameInput.value  = username  || '';
-
-        if (passwordWrapper) {
-          passwordWrapper.style.display = 'none';
-        }
-        if (passwordInput) {
-          passwordInput.removeAttribute('required');
-          passwordInput.value = '';
-        }
-      } else {
-        studentModalTitle.textContent = 'Add Student';
+      window.closeStudentModal = function () {
+        studentModal.classList.add('hidden');
+        studentForm.reset();
         formAction.value    = 'add_student';
         formStudentId.value = '';
-        studentForm.reset();
+        resetPasswordToggleState();
+      };
 
-        if (passwordWrapper) {
-          passwordWrapper.style.display = '';
-        }
-        if (passwordInput) {
-          passwordInput.setAttribute('required', 'required');
-        }
-      }
+      // ---- View Modal ----
+      const viewModal = document.getElementById('viewModal');
 
-      resetPasswordToggleState();
+      window.openViewModal = function (admission, name, email, mobile, address, username) {
+        document.getElementById('viewAdmission').textContent = admission || '—';
+        document.getElementById('viewName').textContent      = name      || '—';
+        document.getElementById('viewUsername').textContent  = '@' + (username || '—');
+        document.getElementById('viewEmail').textContent     = email     || '—';
+        document.getElementById('viewMobile').textContent    = mobile    || '—';
+        document.getElementById('viewAddress').textContent   = address   || '—';
 
-      setTimeout(() => admissionInput && admissionInput.focus(), 50);
-      if (typeof lucide !== 'undefined') lucide.createIcons();
-    }
+        viewModal.classList.remove('hidden');
+        document.body.classList.add('overflow-hidden');
+        if (typeof lucide !== 'undefined') lucide.createIcons();
+      };
 
-    function closeStudentModal() {
-      studentModal.classList.add('hidden');
-      studentForm.reset();
-      formAction.value    = 'add_student';
-      formStudentId.value = '';
-      resetPasswordToggleState();
-    }
+      window.closeViewModal = function () {
+        viewModal.classList.add('hidden');
+        document.body.classList.remove('overflow-hidden');
+      };
 
-    document.addEventListener('keydown', function (e) {
-      if (e.key === 'Escape' && studentModal && !studentModal.classList.contains('hidden')) {
-        closeStudentModal();
-      }
-    });
+      // ---- Delete Confirmation Modal ----
+      const deleteConfirmModal     = document.getElementById('deleteConfirmModal');
+      const deleteConfirmPanel     = document.getElementById('deleteConfirmPanel');
+      const deleteModalTitle       = document.getElementById('deleteModalTitle');
+      const deleteModalDescription = document.getElementById('deleteModalDescription');
+      const confirmDeleteBtn       = document.getElementById('confirmDeleteBtn');
 
-    // ---- View Modal ----
-    const viewModal      = document.getElementById('viewModal');
-    const viewAdmission  = document.getElementById('viewAdmission');
-    const viewName       = document.getElementById('viewName');
-    const viewUsername   = document.getElementById('viewUsername');
-    const viewEmail      = document.getElementById('viewEmail');
-    const viewMobile     = document.getElementById('viewMobile');
-    const viewAddress    = document.getElementById('viewAddress');
+      let pendingDeleteId = null;
+      let bulkDeleteMode  = false;
 
-    function openViewModal(admission, name, email, mobile, address, username) {
-      viewAdmission.textContent = admission || '—';
-      viewName.textContent      = name      || '—';
-      viewUsername.textContent  = '@' + (username || '—');
-      viewEmail.textContent     = email     || '—';
-      viewMobile.textContent    = mobile    || '—';
-      viewAddress.textContent   = address   || '—';
+      window.confirmDeleteStudent = function (studentId, studentName) {
+        bulkDeleteMode  = false;
+        pendingDeleteId = studentId;
 
-      viewModal.classList.remove('hidden');
-      document.body.classList.add('overflow-hidden');
-
-      if (typeof lucide !== 'undefined') lucide.createIcons();
-    }
-
-    function closeViewModal() {
-      viewModal.classList.add('hidden');
-      document.body.classList.remove('overflow-hidden');
-    }
-
-    document.addEventListener('keydown', function (e) {
-      if (e.key === 'Escape' && viewModal && !viewModal.classList.contains('hidden')) {
-        closeViewModal();
-      }
-    });
-
-    // ---- Delete Confirmation Modal ----
-    const deleteConfirmModal     = document.getElementById('deleteConfirmModal');
-    const deleteConfirmPanel     = document.getElementById('deleteConfirmPanel');
-    const deleteModalTitle       = document.getElementById('deleteModalTitle');
-    const deleteModalDescription = document.getElementById('deleteModalDescription');
-    const confirmDeleteBtn       = document.getElementById('confirmDeleteBtn');
-
-    let pendingDeleteId   = null;
-    let bulkDeleteMode    = false;
-
-    function confirmDeleteStudent(studentId, studentName) {
-      bulkDeleteMode = false;
-      pendingDeleteId = studentId;
-
-      deleteModalTitle.textContent = 'Delete Student?';
-      deleteModalDescription.innerHTML = 'You are about to permanently delete <span class="font-bold text-[#8B1E7E] break-words">"' + studentName + '"</span>.';
-      confirmDeleteBtn.querySelector('span').textContent = 'Delete';
-
-      deleteConfirmModal.classList.remove('hidden');
-      document.body.classList.add('overflow-hidden');
-
-      if (deleteConfirmPanel) {
-        deleteConfirmPanel.classList.remove('animate-confirm-shake');
-        void deleteConfirmPanel.offsetWidth;
-        deleteConfirmPanel.classList.add('animate-confirm-shake');
-      }
-
-      setTimeout(function () {
-        if (confirmDeleteBtn) confirmDeleteBtn.focus();
-      }, 80);
-
-      if (typeof lucide !== 'undefined') lucide.createIcons();
-    }
-
-    function closeDeleteModal() {
-      deleteConfirmModal.classList.add('hidden');
-      document.body.classList.remove('overflow-hidden');
-      pendingDeleteId = null;
-      bulkDeleteMode  = false;
-    }
-
-    if (confirmDeleteBtn) {
-      confirmDeleteBtn.addEventListener('click', function () {
-        if (bulkDeleteMode) {
-          const bulkForm = document.getElementById('bulkForm');
-          if (bulkForm) bulkForm.submit();
-          return;
-        }
-
-        if (pendingDeleteId === null || pendingDeleteId === undefined) {
-          closeDeleteModal();
-          return;
-        }
-
-        const delIdInput = document.getElementById('deleteStudentId');
-        const delForm    = document.getElementById('deleteForm');
-
-        if (delIdInput && delForm) {
-          delIdInput.value = String(pendingDeleteId);
-          delForm.submit();
-        } else {
-          closeDeleteModal();
-        }
-      });
-    }
-
-    document.addEventListener('keydown', function (e) {
-      if (e.key === 'Escape' && deleteConfirmModal && !deleteConfirmModal.classList.contains('hidden')) {
-        closeDeleteModal();
-      }
-    });
-
-    // ---- Bulk Delete ----
-    const bulkDeleteBtn = document.getElementById('bulkDeleteBtn');
-    if (bulkDeleteBtn) {
-      bulkDeleteBtn.addEventListener('click', function () {
-        const checked = document.querySelectorAll('.student-checkbox:checked');
-        if (checked.length === 0) {
-          alert('Please select at least one student to delete.');
-          return;
-        }
-
-        bulkDeleteMode = true;
-        pendingDeleteId = null;
-
-        deleteModalTitle.textContent = 'Delete Selected Students?';
-        deleteModalDescription.innerHTML = 'You are about to permanently delete <span class="font-bold text-[#8B1E7E]">' + checked.length + ' student(s)</span>.';
-        confirmDeleteBtn.querySelector('span').textContent = 'Delete All';
+        deleteModalTitle.textContent = 'Delete Student?';
+        deleteModalDescription.innerHTML = 'You are about to permanently delete <span class="font-bold text-[#8B1E7E] break-words">"' + studentName + '"</span>.';
+        confirmDeleteBtn.querySelector('span').textContent = 'Delete';
 
         deleteConfirmModal.classList.remove('hidden');
         document.body.classList.add('overflow-hidden');
@@ -2202,117 +1865,253 @@ if ($conn instanceof mysqli) {
           void deleteConfirmPanel.offsetWidth;
           deleteConfirmPanel.classList.add('animate-confirm-shake');
         }
-
-        setTimeout(function () {
-          if (confirmDeleteBtn) confirmDeleteBtn.focus();
-        }, 80);
-
+        setTimeout(function () { if (confirmDeleteBtn) confirmDeleteBtn.focus(); }, 80);
         if (typeof lucide !== 'undefined') lucide.createIcons();
-      });
-    }
+      };
 
-    // ---- Select All Checkbox ----
-    (function () {
-      const selectAll  = document.getElementById('selectAllCheckbox');
-      const checkboxes = document.querySelectorAll('.student-checkbox');
+      window.closeDeleteModal = function () {
+        deleteConfirmModal.classList.add('hidden');
+        document.body.classList.remove('overflow-hidden');
+        pendingDeleteId = null;
+        bulkDeleteMode  = false;
+      };
 
-      if (!selectAll) return;
+      if (confirmDeleteBtn) {
+        confirmDeleteBtn.addEventListener('click', function () {
+          if (bulkDeleteMode) {
+            const bulkForm = document.getElementById('bulkForm');
+            if (bulkForm) bulkForm.submit();
+            return;
+          }
+          if (pendingDeleteId === null || pendingDeleteId === undefined) {
+            window.closeDeleteModal();
+            return;
+          }
+          const delIdInput = document.getElementById('deleteStudentId');
+          const delForm    = document.getElementById('deleteForm');
+          if (delIdInput && delForm) {
+            delIdInput.value = String(pendingDeleteId);
+            delForm.submit();
+          } else {
+            window.closeDeleteModal();
+          }
+        });
+      }
 
-      selectAll.addEventListener('change', function () {
+      // ---- Bulk Delete ----
+      const bulkDeleteBtn = document.getElementById('bulkDeleteBtn');
+      if (bulkDeleteBtn) {
+        bulkDeleteBtn.addEventListener('click', function () {
+          const checked = document.querySelectorAll('.student-checkbox:checked');
+          if (checked.length === 0) {
+            alert('Please select at least one student to delete.');
+            return;
+          }
+
+          bulkDeleteMode  = true;
+          pendingDeleteId = null;
+
+          deleteModalTitle.textContent = 'Delete Selected Students?';
+          deleteModalDescription.innerHTML = 'You are about to permanently delete <span class="font-bold text-[#8B1E7E]">' + checked.length + ' student(s)</span>.';
+          confirmDeleteBtn.querySelector('span').textContent = 'Delete All';
+
+          deleteConfirmModal.classList.remove('hidden');
+          document.body.classList.add('overflow-hidden');
+
+          if (deleteConfirmPanel) {
+            deleteConfirmPanel.classList.remove('animate-confirm-shake');
+            void deleteConfirmPanel.offsetWidth;
+            deleteConfirmPanel.classList.add('animate-confirm-shake');
+          }
+          setTimeout(function () { if (confirmDeleteBtn) confirmDeleteBtn.focus(); }, 80);
+          if (typeof lucide !== 'undefined') lucide.createIcons();
+        });
+      }
+
+      // ---- Select All ----
+      (function () {
+        const selectAll  = document.getElementById('selectAllCheckbox');
+        const checkboxes = document.querySelectorAll('.student-checkbox');
+        if (!selectAll) return;
+
+        selectAll.addEventListener('change', function () {
+          checkboxes.forEach(function (cb) { cb.checked = selectAll.checked; });
+        });
         checkboxes.forEach(function (cb) {
-          cb.checked = selectAll.checked;
+          cb.addEventListener('change', function () {
+            const allChecked = Array.from(checkboxes).every(c => c.checked);
+            const anyChecked = Array.from(checkboxes).some(c => c.checked);
+            selectAll.checked = allChecked;
+            selectAll.indeterminate = anyChecked && !allChecked;
+          });
         });
-      });
+      })();
 
-      checkboxes.forEach(function (cb) {
-        cb.addEventListener('change', function () {
-          const allChecked = Array.from(checkboxes).every(c => c.checked);
-          const anyChecked = Array.from(checkboxes).some(c => c.checked);
-          selectAll.checked = allChecked;
-          selectAll.indeterminate = anyChecked && !allChecked;
-        });
-      });
-    })();
+      // ---- Set Password Modal ----
+      const setPasswordModal       = document.getElementById('setPasswordModal');
+      const setPasswordPanel       = document.getElementById('setPasswordPanel');
+      const setPasswordForm        = document.getElementById('setPasswordForm');
+      const setPasswordStudentId   = document.getElementById('setPasswordStudentId');
+      const setPasswordStudentName = document.getElementById('setPasswordStudentName');
+      const newPasswordInput       = document.getElementById('new_password');
+      const confirmPasswordInput   = document.getElementById('confirm_password');
+      const matchHint              = document.getElementById('setPasswordMatchHint');
 
-    // ---- Reset Password Modal ----
-    const resetConfirmModal  = document.getElementById('resetConfirmModal');
-    const resetConfirmPanel  = document.getElementById('resetConfirmPanel');
-    const resetStudentNameEl = document.getElementById('resetStudentNameDisplay');
-    const confirmResetBtn    = document.getElementById('confirmResetBtn');
+      window.openSetPasswordModal = function (studentId, studentName) {
+        setPasswordStudentId.value = String(studentId);
+        setPasswordStudentName.textContent = '"' + (studentName || '') + '"';
+        if (setPasswordForm) setPasswordForm.reset();
 
-    let pendingResetId = null;
+        // Reset both toggles
+        if (newPasswordInput) newPasswordInput.type = 'password';
+        if (confirmPasswordInput) confirmPasswordInput.type = 'password';
+        const ni = document.getElementById('toggleNewPasswordIcon');
+        const ci = document.getElementById('toggleConfirmPasswordIcon');
+        if (ni) ni.setAttribute('data-lucide', 'eye');
+        if (ci) ci.setAttribute('data-lucide', 'eye');
 
-    function confirmResetPassword(studentId, studentName) {
-      pendingResetId = studentId;
+        if (matchHint) { matchHint.classList.add('hidden'); matchHint.textContent = ''; }
 
-      if (resetStudentNameEl) {
-        resetStudentNameEl.textContent = '"' + studentName + '"';
-      }
+        setPasswordModal.classList.remove('hidden');
+        document.body.classList.add('overflow-hidden');
 
-      resetConfirmModal.classList.remove('hidden');
-      document.body.classList.add('overflow-hidden');
+        if (setPasswordPanel) {
+          setPasswordPanel.classList.remove('animate-confirm-shake');
+          void setPasswordPanel.offsetWidth;
+          setPasswordPanel.classList.add('animate-confirm-shake');
+        }
 
-      if (resetConfirmPanel) {
-        resetConfirmPanel.classList.remove('animate-confirm-shake');
-        void resetConfirmPanel.offsetWidth;
-        resetConfirmPanel.classList.add('animate-confirm-shake');
-      }
+        setTimeout(function () { if (newPasswordInput) newPasswordInput.focus(); }, 80);
+        if (typeof lucide !== 'undefined') lucide.createIcons();
+      };
 
-      setTimeout(function () {
-        if (confirmResetBtn) confirmResetBtn.focus();
-      }, 80);
+      window.closeSetPasswordModal = function () {
+        setPasswordModal.classList.add('hidden');
+        document.body.classList.remove('overflow-hidden');
+        if (setPasswordForm) setPasswordForm.reset();
+      };
 
-      if (typeof lucide !== 'undefined') lucide.createIcons();
-    }
+      // Wire toggles for the Set Password form
+      wireToggle('toggleNewPasswordBtn', 'toggleNewPasswordIcon', newPasswordInput);
+      wireToggle('toggleConfirmPasswordBtn', 'toggleConfirmPasswordIcon', confirmPasswordInput);
 
-    function closeResetModal() {
-      resetConfirmModal.classList.add('hidden');
-      document.body.classList.remove('overflow-hidden');
-      pendingResetId = null;
-    }
+      // Live match feedback for the Set Password form
+      function updateMatchHint() {
+        if (!matchHint || !newPasswordInput || !confirmPasswordInput) return;
+        const a = newPasswordInput.value;
+        const b = confirmPasswordInput.value;
 
-    if (confirmResetBtn) {
-      confirmResetBtn.addEventListener('click', function () {
-        if (pendingResetId === null || pendingResetId === undefined) {
-          closeResetModal();
+        if (b === '') {
+          matchHint.classList.add('hidden');
+          matchHint.textContent = '';
           return;
         }
-
-        const resetIdInput = document.getElementById('resetStudentId');
-        const resetForm    = document.getElementById('resetForm');
-
-        if (resetIdInput && resetForm) {
-          resetIdInput.value = String(pendingResetId);
-          resetForm.submit();
+        matchHint.classList.remove('hidden');
+        if (a === b) {
+          matchHint.textContent = 'Passwords match ✓';
+          matchHint.className = 'text-[11px] mt-1 text-emerald-600 font-medium';
         } else {
-          closeResetModal();
+          matchHint.textContent = 'Passwords do not match';
+          matchHint.className = 'text-[11px] mt-1 text-red-600 font-medium';
         }
-      });
-    }
-
-    document.addEventListener('keydown', function (e) {
-      if (e.key === 'Escape' && resetConfirmModal && !resetConfirmModal.classList.contains('hidden')) {
-        closeResetModal();
       }
-    });
+      if (newPasswordInput) newPasswordInput.addEventListener('input', updateMatchHint);
+      if (confirmPasswordInput) confirmPasswordInput.addEventListener('input', updateMatchHint);
 
-    // ---- Live Search ----
-    (function () {
-      const searchInput = document.getElementById('searchInput');
-      const tableBody   = document.getElementById('studentsTableBody');
+      // Block form submit if passwords don't match
+      if (setPasswordForm) {
+        setPasswordForm.addEventListener('submit', function (e) {
+          const a = newPasswordInput ? newPasswordInput.value : '';
+          const b = confirmPasswordInput ? confirmPasswordInput.value : '';
+          if (a.length < 6) {
+            e.preventDefault();
+            alert('Password must be at least 6 characters long.');
+            if (newPasswordInput) newPasswordInput.focus();
+            return;
+          }
+          if (a !== b) {
+            e.preventDefault();
+            alert('Passwords do not match. Please re-enter.');
+            if (confirmPasswordInput) confirmPasswordInput.focus();
+            return;
+          }
+          const btn = setPasswordForm.querySelector('button[type="submit"]');
+          if (btn) { btn.classList.add('opacity-50', 'pointer-events-none'); btn.innerHTML = '<span>Saving…</span>'; }
+        });
+      }
 
-      if (!searchInput || !tableBody) return;
+      // ---- Logout Confirmation Modal ----
+      (function () {
+        const logoutConfirmModal = document.getElementById('logoutConfirmModal');
+        const logoutConfirmPanel = document.getElementById('logoutConfirmPanel');
+        const confirmLogoutBtn   = document.getElementById('confirmLogoutBtn');
+        const LOGOUT_URL         = '../logout.php?role=admin';
 
-      searchInput.addEventListener('input', function () {
-        const term = this.value.toLowerCase().trim();
-        const rows = tableBody.querySelectorAll('tr');
+        if (!logoutConfirmModal) return;
 
-        rows.forEach(function (row) {
-          const text = row.textContent.toLowerCase();
-          row.style.display = (term === '' || text.indexOf(term) !== -1) ? '' : 'none';
+        window.openLogoutModal = function () {
+          logoutConfirmModal.classList.remove('hidden');
+          document.body.classList.add('overflow-hidden');
+          if (logoutConfirmPanel) {
+            logoutConfirmPanel.classList.remove('animate-confirm-shake');
+            void logoutConfirmPanel.offsetWidth;
+            logoutConfirmPanel.classList.add('animate-confirm-shake');
+          }
+          setTimeout(function () { if (confirmLogoutBtn) confirmLogoutBtn.focus(); }, 80);
+          if (typeof lucide !== 'undefined') lucide.createIcons();
+        };
+        window.closeLogoutModal = function () {
+          logoutConfirmModal.classList.add('hidden');
+          document.body.classList.remove('overflow-hidden');
+        };
+
+        [document.getElementById('sidebarLogoutBtn'), document.getElementById('dropdownLogoutBtn')].forEach(function (btn) {
+          if (!btn) return;
+          btn.addEventListener('click', function (e) {
+            e.preventDefault();
+            e.stopPropagation();
+            window.openLogoutModal();
+          });
+        });
+
+        if (confirmLogoutBtn) {
+          confirmLogoutBtn.addEventListener('click', function () {
+            confirmLogoutBtn.classList.add('opacity-50', 'pointer-events-none');
+            window.location.href = LOGOUT_URL;
+          });
+        }
+      })();
+
+      // ---- Escape key: close any open modal ----
+      document.addEventListener('keydown', function (e) {
+        if (e.key !== 'Escape') return;
+
+        [importModal, studentModal, viewModal, deleteConfirmModal, setPasswordModal, logoutConfirmModal].forEach(function (m) {
+          if (m && !m.classList.contains('hidden')) {
+            if (m === importModal)         window.closeImportModal();
+            if (m === studentModal)        window.closeStudentModal();
+            if (m === viewModal)           window.closeViewModal();
+            if (m === deleteConfirmModal)  window.closeDeleteModal();
+            if (m === setPasswordModal)    window.closeSetPasswordModal();
+            if (m === logoutConfirmModal)  window.closeLogoutModal();
+          }
         });
       });
-    })();
+
+      // ---- Live Search ----
+      (function () {
+        const searchInput = document.getElementById('searchInput');
+        const tableBody   = document.getElementById('studentsTableBody');
+        if (!searchInput || !tableBody) return;
+
+        searchInput.addEventListener('input', function () {
+          const term = this.value.toLowerCase().trim();
+          tableBody.querySelectorAll('tr').forEach(function (row) {
+            row.style.display = (term === '' || row.textContent.toLowerCase().indexOf(term) !== -1) ? '' : 'none';
+          });
+        });
+      })();
+    });
   </script>
 
   <script src="../assets/js/index.js"></script>

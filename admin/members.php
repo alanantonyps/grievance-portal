@@ -9,6 +9,8 @@
  *   • Grievance Type
  *   • New Registrations
  *   • Termination
+ *
+ * Includes themed logout confirmation modal.
  * ---------------------------------------------------------------------------
  */
 
@@ -67,7 +69,7 @@ if (!file_exists($dbFile)) {
 }
 
 // ---------------------------------------------------------------------------
-// 4. HELPER — HTML ESCAPE
+// 4. HELPER
 // ---------------------------------------------------------------------------
 function e(?string $v): string
 {
@@ -118,7 +120,6 @@ if ($conn instanceof mysqli) {
 $displayName  = !empty($adminData['name']) ? $adminData['name'] : $adminData['username'];
 $displayEmail = !empty($adminData['email']) ? $adminData['email'] : 'admin@rajagiri.edu';
 
-// Profile picture resolution
 $hasProfilePicture = false;
 $profilePictureUrl = '';
 
@@ -165,13 +166,9 @@ $membersCards = [
   <title>Members — Admin | Rajagiri College Grievance Portal</title>
   <link rel="icon" type="image/svg+xml" href="../public/favicon.svg" />
 
-  <!-- Tailwind CSS CDN -->
   <script src="https://cdn.tailwindcss.com"></script>
-
-  <!-- Lucide Icons CDN -->
   <script src="https://unpkg.com/lucide@latest"></script>
 
-  <!-- Tailwind Theme -->
   <script>
     tailwind.config = {
       theme: {
@@ -190,18 +187,30 @@ $membersCards = [
             dropdownFade: {
               '0%':   { opacity: '0', transform: 'translateY(-8px) scale(0.98)' },
               '100%': { opacity: '1', transform: 'translateY(0) scale(1)' }
+            },
+            modalFadeIn: {
+              '0%':   { opacity: '0', transform: 'scale(0.96)' },
+              '100%': { opacity: '1', transform: 'scale(1)' }
+            },
+            confirmShake: {
+              '0%, 100%': { transform: 'translateX(0)' },
+              '20%':      { transform: 'translateX(-6px)' },
+              '40%':      { transform: 'translateX(6px)' },
+              '60%':      { transform: 'translateX(-4px)' },
+              '80%':      { transform: 'translateX(4px)' }
             }
           },
           animation: {
-            'fade-in-up': 'fadeInUp 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards',
-            'dropdown':   'dropdownFade 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards'
+            'fade-in-up':    'fadeInUp 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards',
+            'dropdown':      'dropdownFade 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards',
+            'modal-in':      'modalFadeIn 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards',
+            'confirm-shake': 'confirmShake 0.5s cubic-bezier(0.16, 1, 0.3, 1)'
           }
         }
       }
     };
   </script>
 
-  <!-- Local Styles -->
   <link rel="stylesheet" href="../assets/css/index.css" />
 </head>
 
@@ -209,9 +218,7 @@ $membersCards = [
 
   <div class="flex min-h-screen flex-1">
 
-    <!-- ============================================================
-         SIDEBAR
-         ============================================================ -->
+    <!-- SIDEBAR -->
     <aside class="w-20 bg-gradient-to-b from-[#4A154B] via-[#5A1B5C] to-[#006837] flex flex-col items-center py-4 shadow-2xl fixed inset-y-0 left-0 z-40">
 
       <button class="text-white/80 hover:text-white mb-8 p-2 rounded-lg hover:bg-white/10 transition-colors" aria-label="Toggle sidebar">
@@ -220,7 +227,6 @@ $membersCards = [
 
       <nav class="flex flex-col items-center space-y-6 flex-1">
 
-        <!-- Dashboard -->
         <a href="dashboard.php"
            class="group relative w-12 h-12 rounded-xl bg-white/10 hover:bg-white/20 flex items-center justify-center text-white transition-all hover:scale-110"
            title="Dashboard">
@@ -230,7 +236,6 @@ $membersCards = [
           </span>
         </a>
 
-        <!-- Profile -->
         <a href="profile.php"
            class="group relative w-12 h-12 rounded-xl bg-white/10 hover:bg-white/20 flex items-center justify-center text-white transition-all hover:scale-110"
            title="Profile">
@@ -242,8 +247,8 @@ $membersCards = [
 
       </nav>
 
-      <!-- Logout -->
-      <a href="../logout.php?role=admin"
+      <!-- Logout Trigger -->
+      <a href="#" data-logout-trigger="1"
          id="sidebarLogoutBtn"
          class="group relative w-12 h-12 rounded-xl bg-white/10 hover:bg-red-500/40 flex items-center justify-center text-white transition-all hover:scale-110"
          title="Logout">
@@ -255,12 +260,9 @@ $membersCards = [
 
     </aside>
 
-    <!-- ============================================================
-         MAIN CONTENT
-         ============================================================ -->
+    <!-- MAIN CONTENT -->
     <div class="flex-1 ml-20 flex flex-col min-h-screen">
 
-      <!-- ============ TOP HEADER ============ -->
       <header class="bg-white border-b border-slate-200 shadow-sm sticky top-0 z-30">
         <div class="flex items-center justify-between px-6 py-4">
 
@@ -278,7 +280,6 @@ $membersCards = [
                  class="hidden sm:block h-8 md:h-9 w-auto object-contain" />
           </div>
 
-          <!-- ============ ADMIN PROFILE DROPDOWN ============ -->
           <div class="relative" id="admin-dropdown-container">
             <button id="admin-dropdown-btn"
                     type="button"
@@ -306,15 +307,12 @@ $membersCards = [
                  class="w-4 h-4 text-slate-500 transition-transform duration-300"></i>
             </button>
 
-            <!-- Dropdown Menu -->
             <div id="admin-dropdown-menu"
                  class="hidden absolute right-0 mt-2 w-64 bg-white rounded-xl shadow-2xl
                         border border-slate-200 py-2 z-50 overflow-hidden">
 
-              <!-- Header: Name + Email -->
               <div class="px-4 py-3 border-b border-slate-100 bg-gradient-to-r from-slate-50 to-white">
                 <div class="flex items-center space-x-3">
-
                   <?php if ($hasProfilePicture): ?>
                     <img src="<?= e($profilePictureUrl) ?>"
                          alt="<?= e($displayName) ?>"
@@ -333,7 +331,6 @@ $membersCards = [
                 </div>
               </div>
 
-              <!-- Menu Item: Dashboard -->
               <a href="dashboard.php"
                  class="flex items-center px-4 py-2.5 text-sm text-slate-700
                         hover:bg-gradient-to-r hover:from-pink-50 hover:to-purple-50
@@ -343,7 +340,6 @@ $membersCards = [
                 <i data-lucide="arrow-right" class="w-4 h-4 ml-auto opacity-0 group-hover/item:opacity-100 text-[#8B1E7E] transition-opacity"></i>
               </a>
 
-              <!-- Menu Item: My Profile -->
               <a href="profile.php"
                  class="flex items-center px-4 py-2.5 text-sm text-slate-700
                         hover:bg-gradient-to-r hover:from-pink-50 hover:to-purple-50
@@ -353,7 +349,6 @@ $membersCards = [
                 <i data-lucide="arrow-right" class="w-4 h-4 ml-auto opacity-0 group-hover/item:opacity-100 text-[#8B1E7E] transition-opacity"></i>
               </a>
 
-              <!-- Menu Item: Change Password -->
               <a href="change_password.php"
                  class="flex items-center px-4 py-2.5 text-sm text-slate-700
                         hover:bg-gradient-to-r hover:from-pink-50 hover:to-purple-50
@@ -363,9 +358,8 @@ $membersCards = [
                 <i data-lucide="arrow-right" class="w-4 h-4 ml-auto opacity-0 group-hover/item:opacity-100 text-[#8B1E7E] transition-opacity"></i>
               </a>
 
-              <!-- Divider + Logout -->
               <div class="border-t border-slate-100 mt-2 pt-2">
-                <a href="../logout.php?role=admin"
+                <a href="#" data-logout-trigger="1"
                    id="dropdownLogoutBtn"
                    class="flex items-center px-4 py-2.5 text-sm text-red-600
                           hover:bg-red-50 transition-all duration-200 group/item">
@@ -379,10 +373,8 @@ $membersCards = [
         </div>
       </header>
 
-      <!-- ============ PAGE CONTENT ============ -->
       <main class="flex-1 px-6 py-8">
 
-        <!-- Breadcrumb / Page Title -->
         <div class="max-w-5xl mx-auto mb-10 animate-fade-in-up text-center">
 
           <h1 class="text-2xl md:text-3xl lg:text-4xl font-bold text-slate-800 mb-4 tracking-tight">
@@ -400,8 +392,6 @@ $membersCards = [
 
         </div>
 
-        <!-- ============ MEMBERS HUB GRID ============ -->
-        <!-- 3-column layout on desktop: 3 cards in a single balanced row -->
         <div class="max-w-5xl mx-auto animate-fade-in-up" style="animation-delay: 100ms;">
 
           <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 lg:gap-8">
@@ -470,7 +460,6 @@ $membersCards = [
 
       </main>
 
-      <!-- ============ FOOTER ============ -->
       <footer class="bg-gradient-to-r from-purple-200 via-pink-100 to-purple-200 border-t border-purple-200/60 mt-auto">
         <div class="px-6 py-6">
           <div class="max-w-7xl mx-auto text-center">
@@ -492,85 +481,145 @@ $membersCards = [
     </div>
   </div>
 
-  <!-- ====================== SCRIPTS ====================== -->
+  <!-- ============================================================ -->
+  <!-- LOGOUT CONFIRMATION MODAL                                     -->
+  <!-- ============================================================ -->
+  <div id="logoutConfirmModal" class="hidden fixed inset-0 z-[70] flex items-center justify-center p-4">
+    <div class="absolute inset-0 bg-black/50 backdrop-blur-sm" onclick="closeLogoutModal()"></div>
+
+    <div id="logoutConfirmPanel" class="relative w-full max-w-md bg-white rounded-2xl shadow-2xl animate-modal-in overflow-hidden">
+      <div class="h-1.5 w-full bg-gradient-to-r from-[#6A2C8A] via-[#8B1E7E] to-[#C43A7A]"></div>
+
+      <div class="px-6 pt-6 pb-2 flex flex-col items-center text-center">
+        <div class="w-16 h-16 rounded-full flex items-center justify-center mb-4 bg-gradient-to-br from-red-100 to-pink-100 ring-4 ring-red-50">
+          <i data-lucide="log-out" class="w-8 h-8 text-red-500"></i>
+        </div>
+
+        <h3 class="text-xl font-bold text-slate-800 mb-2">Log Out?</h3>
+
+        <p class="text-sm text-slate-500 leading-relaxed">
+          You are about to log out of <span class="font-bold text-[#8B1E7E] break-words"><?= e($displayName) ?></span>.
+          Any unsaved changes will be lost.
+        </p>
+
+        <p class="text-xs text-slate-400 font-medium mt-3 flex items-center gap-1.5">
+          <i data-lucide="info" class="w-3.5 h-3.5"></i> You can log back in anytime.
+        </p>
+      </div>
+
+      <div class="px-6 py-5 mt-2 flex flex-col-reverse sm:flex-row gap-3">
+        <button type="button" onclick="closeLogoutModal()"
+                class="flex-1 px-5 py-3 rounded-xl font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-200 transition-all duration-200 active:scale-95">
+          Cancel
+        </button>
+        <button type="button" id="confirmLogoutBtn"
+                class="flex-1 px-5 py-3 rounded-xl font-bold text-white bg-gradient-to-r from-red-500 via-red-600 to-rose-600 hover:from-red-600 hover:via-red-700 hover:to-rose-700 shadow-lg shadow-red-500/30 hover:shadow-red-500/50 transition-all duration-300 hover:-translate-y-0.5 active:scale-95 flex items-center justify-center gap-2">
+          <i data-lucide="log-out" class="w-4 h-4"></i>
+          <span>Log Out</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
   <script>
-    // Initialize Lucide icons
-    if (typeof lucide !== 'undefined') {
-      lucide.createIcons();
-    }
+    document.addEventListener('DOMContentLoaded', function () {
 
-    // ============================================================
-    // ADMIN PROFILE DROPDOWN
-    // ============================================================
-    (function () {
-      const btn       = document.getElementById('admin-dropdown-btn');
-      const menu      = document.getElementById('admin-dropdown-menu');
-      const chevron   = document.getElementById('admin-chevron');
-      const container = document.getElementById('admin-dropdown-container');
+      if (typeof lucide !== 'undefined') {
+        lucide.createIcons();
+      }
 
-      if (!btn || !menu || !container) return;
-
-      btn.addEventListener('click', function (e) {
-        e.stopPropagation();
-        const isOpen = !menu.classList.contains('hidden');
-
-        if (isOpen) {
-          menu.classList.add('hidden');
-          menu.classList.remove('animate-dropdown');
-          if (chevron) chevron.classList.remove('rotate-180');
-          btn.setAttribute('aria-expanded', 'false');
-        } else {
-          menu.classList.remove('hidden');
-          menu.classList.add('animate-dropdown');
-          if (chevron) chevron.classList.add('rotate-180');
-          btn.setAttribute('aria-expanded', 'true');
-        }
-      });
-
-      // Close on outside click
-      document.addEventListener('click', function (e) {
-        if (!container.contains(e.target)) {
-          menu.classList.add('hidden');
-          menu.classList.remove('animate-dropdown');
-          if (chevron) chevron.classList.remove('rotate-180');
-          btn.setAttribute('aria-expanded', 'false');
-        }
-      });
-
-      // Close on Escape
-      document.addEventListener('keydown', function (e) {
-        if (e.key === 'Escape') {
-          menu.classList.add('hidden');
-          menu.classList.remove('animate-dropdown');
-          if (chevron) chevron.classList.remove('rotate-180');
-          btn.setAttribute('aria-expanded', 'false');
-        }
-      });
-    })();
-
-    // ============================================================
-    // LOGOUT CONFIRMATION
-    // ============================================================
-    (function () {
-      const logoutButtons = [
-        document.getElementById('sidebarLogoutBtn'),
-        document.getElementById('dropdownLogoutBtn'),
-      ];
-
-      logoutButtons.forEach(function (btn) {
-        if (!btn) return;
+      // ---- Admin Profile Dropdown ----
+      (function () {
+        const btn       = document.getElementById('admin-dropdown-btn');
+        const menu      = document.getElementById('admin-dropdown-menu');
+        const chevron   = document.getElementById('admin-chevron');
+        const container = document.getElementById('admin-dropdown-container');
+        if (!btn || !menu || !container) return;
 
         btn.addEventListener('click', function (e) {
-          const confirmed = window.confirm('Are you sure you want to log out?');
-          if (!confirmed) {
+          e.stopPropagation();
+          const isOpen = !menu.classList.contains('hidden');
+          if (isOpen) {
+            menu.classList.add('hidden');
+            menu.classList.remove('animate-dropdown');
+            if (chevron) chevron.classList.remove('rotate-180');
+            btn.setAttribute('aria-expanded', 'false');
+          } else {
+            menu.classList.remove('hidden');
+            menu.classList.add('animate-dropdown');
+            if (chevron) chevron.classList.add('rotate-180');
+            btn.setAttribute('aria-expanded', 'true');
+          }
+        });
+
+        document.addEventListener('click', function (e) {
+          if (!container.contains(e.target)) {
+            menu.classList.add('hidden');
+            menu.classList.remove('animate-dropdown');
+            if (chevron) chevron.classList.remove('rotate-180');
+            btn.setAttribute('aria-expanded', 'false');
+          }
+        });
+
+        document.addEventListener('keydown', function (e) {
+          if (e.key === 'Escape') {
+            menu.classList.add('hidden');
+            menu.classList.remove('animate-dropdown');
+            if (chevron) chevron.classList.remove('rotate-180');
+            btn.setAttribute('aria-expanded', 'false');
+          }
+        });
+      })();
+
+      // ---- Logout Confirmation Modal ----
+      (function () {
+        const logoutConfirmModal = document.getElementById('logoutConfirmModal');
+        const logoutConfirmPanel = document.getElementById('logoutConfirmPanel');
+        const confirmLogoutBtn   = document.getElementById('confirmLogoutBtn');
+        const LOGOUT_URL         = '../logout.php?role=admin';
+
+        if (!logoutConfirmModal) return;
+
+        window.openLogoutModal = function () {
+          logoutConfirmModal.classList.remove('hidden');
+          document.body.classList.add('overflow-hidden');
+          if (logoutConfirmPanel) {
+            logoutConfirmPanel.classList.remove('animate-confirm-shake');
+            void logoutConfirmPanel.offsetWidth;
+            logoutConfirmPanel.classList.add('animate-confirm-shake');
+          }
+          setTimeout(function () { if (confirmLogoutBtn) confirmLogoutBtn.focus(); }, 80);
+          if (typeof lucide !== 'undefined') lucide.createIcons();
+        };
+        window.closeLogoutModal = function () {
+          logoutConfirmModal.classList.add('hidden');
+          document.body.classList.remove('overflow-hidden');
+        };
+
+        [document.getElementById('sidebarLogoutBtn'), document.getElementById('dropdownLogoutBtn')].forEach(function (btn) {
+          if (!btn) return;
+          btn.addEventListener('click', function (e) {
             e.preventDefault();
             e.stopPropagation();
-            return false;
-          }
-          btn.classList.add('opacity-50', 'pointer-events-none');
+            window.openLogoutModal();
+          });
         });
-      });
-    })();
+
+        if (confirmLogoutBtn) {
+          confirmLogoutBtn.addEventListener('click', function () {
+            confirmLogoutBtn.classList.add('opacity-50', 'pointer-events-none');
+            window.location.href = LOGOUT_URL;
+          });
+        }
+
+        document.addEventListener('keydown', function (e) {
+          if (e.key === 'Escape' && !logoutConfirmModal.classList.contains('hidden')) {
+            window.closeLogoutModal();
+          }
+        });
+      })();
+
+    });
   </script>
 
   <script src="../assets/js/index.js"></script>

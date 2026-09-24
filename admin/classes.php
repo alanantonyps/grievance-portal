@@ -12,6 +12,7 @@
  *   • Click a class card → navigate to student list for that class
  *   • Flash messages auto-dismiss after 3 seconds
  *   • 3-column grid layout for class cards
+ *   • Themed logout confirmation modal
  * ---------------------------------------------------------------------------
  */
 
@@ -70,7 +71,7 @@ if (!file_exists($dbFile)) {
 }
 
 // ---------------------------------------------------------------------------
-// 4. HELPER — HTML ESCAPE
+// 4. HELPER
 // ---------------------------------------------------------------------------
 function e(?string $v): string
 {
@@ -78,7 +79,7 @@ function e(?string $v): string
 }
 
 // ---------------------------------------------------------------------------
-// 5. FETCH ADMIN PROFILE (for header)
+// 5. FETCH ADMIN PROFILE
 // ---------------------------------------------------------------------------
 $adminData = [
     'username'        => $_SESSION['username'] ?? 'Admin',
@@ -394,7 +395,8 @@ if ($conn instanceof mysqli) {
 
       </nav>
 
-      <a href="../logout.php?role=admin"
+      <!-- Logout Trigger -->
+      <a href="#" data-logout-trigger="1"
          id="sidebarLogoutBtn"
          class="group relative w-12 h-12 rounded-xl bg-white/10 hover:bg-red-500/40 flex items-center justify-center text-white transition-all hover:scale-110"
          title="Logout">
@@ -491,7 +493,9 @@ if ($conn instanceof mysqli) {
               </a>
 
               <div class="border-t border-slate-100 mt-2 pt-2">
-                <a href="../logout.php?role=admin" id="dropdownLogoutBtn" class="flex items-center px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 transition-all duration-200 group/item">
+                <a href="#" data-logout-trigger="1"
+                   id="dropdownLogoutBtn"
+                   class="flex items-center px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 transition-all duration-200 group/item">
                   <i data-lucide="log-out" class="w-4 h-4 mr-3 group-hover/item:scale-110 transition-transform"></i>
                   <span class="font-medium">Logout</span>
                 </a>
@@ -596,7 +600,6 @@ if ($conn instanceof mysqli) {
                 <div class="mt-3 h-px bg-gradient-to-r from-slate-300 via-slate-200 to-transparent"></div>
               </div>
 
-              <!-- 3-column grid: 1 col on mobile, 2 on tablet, 3 on desktop -->
               <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5 mb-4">
 
                 <?php foreach ($classes as $i => $class): ?>
@@ -618,10 +621,8 @@ if ($conn instanceof mysqli) {
                             overflow-hidden
                             flex flex-col justify-center min-h-[88px]">
 
-                    <!-- Content -->
                     <div class="relative z-10 flex items-center justify-between gap-3">
 
-                      <!-- Left: Student Count Badge -->
                       <div class="flex items-center space-x-1.5 bg-white rounded-full px-2.5 py-1.5 shadow-sm flex-shrink-0
                                   group-hover:bg-gradient-to-r group-hover:from-[#6A2C8A] group-hover:to-[#C43A7A]
                                   transition-all duration-300">
@@ -629,7 +630,6 @@ if ($conn instanceof mysqli) {
                         <span class="text-xs font-bold text-[#4A154B] group-hover:text-white transition-colors"><?= $studentCount ?></span>
                       </div>
 
-                      <!-- Center: Course + Class Name -->
                       <div class="flex-1 min-w-0 text-center">
                         <p class="text-[9px] font-bold uppercase tracking-wider text-slate-500 mb-0.5 truncate">
                           <?= e($class['course_name']) ?>
@@ -639,7 +639,6 @@ if ($conn instanceof mysqli) {
                         </p>
                       </div>
 
-                      <!-- Right: Edit + Delete Icons -->
                       <div class="flex flex-col gap-1 flex-shrink-0">
                         <button type="button"
                                 title="Edit class"
@@ -662,7 +661,6 @@ if ($conn instanceof mysqli) {
 
                     </div>
 
-                    <!-- Bottom accent bar — matching the new darker button gradient -->
                     <div class="absolute bottom-0 left-0 right-0 h-1 z-0
                                 bg-gradient-to-r from-[#6A2C8A] via-[#8B1E7E] to-[#C43A7A]
                                 transform scale-x-0 group-hover:scale-x-100
@@ -764,21 +762,15 @@ if ($conn instanceof mysqli) {
     </div>
   </div>
 
-  <!-- ============================================================= -->
-  <!-- CUSTOM DELETE CONFIRMATION MODAL                              -->
-  <!-- ============================================================= -->
+  <!-- DELETE CONFIRMATION MODAL -->
   <div id="deleteConfirmModal" class="hidden fixed inset-0 z-[70] flex items-center justify-center p-4">
-    <!-- Backdrop -->
     <div class="absolute inset-0 bg-black/50 backdrop-blur-sm" onclick="closeDeleteModal()"></div>
 
-    <!-- Modal Panel -->
     <div id="deleteConfirmPanel"
          class="relative w-full max-w-md bg-white rounded-2xl shadow-2xl animate-modal-in overflow-hidden">
 
-      <!-- Top gradient accent bar -->
       <div class="h-1.5 w-full bg-gradient-to-r from-[#6A2C8A] via-[#8B1E7E] to-[#C43A7A]"></div>
 
-      <!-- Icon + Heading -->
       <div class="px-6 pt-6 pb-2 flex flex-col items-center text-center">
         <div class="w-16 h-16 rounded-full flex items-center justify-center mb-4
                     bg-gradient-to-br from-red-100 to-pink-100 ring-4 ring-red-50">
@@ -799,7 +791,6 @@ if ($conn instanceof mysqli) {
         </p>
       </div>
 
-      <!-- Action Buttons -->
       <div class="px-6 py-5 mt-2 flex flex-col-reverse sm:flex-row gap-3">
         <button type="button"
                 onclick="closeDeleteModal()"
@@ -826,6 +817,46 @@ if ($conn instanceof mysqli) {
     </div>
   </div>
 
+  <!-- ============================================================ -->
+  <!-- LOGOUT MODAL                                                 -->
+  <!-- ============================================================ -->
+  <div id="logoutConfirmModal" class="hidden fixed inset-0 z-[70] flex items-center justify-center p-4">
+    <div class="absolute inset-0 bg-black/50 backdrop-blur-sm" onclick="closeLogoutModal()"></div>
+
+    <div id="logoutConfirmPanel" class="relative w-full max-w-md bg-white rounded-2xl shadow-2xl animate-modal-in overflow-hidden">
+      <div class="h-1.5 w-full bg-gradient-to-r from-[#6A2C8A] via-[#8B1E7E] to-[#C43A7A]"></div>
+
+      <div class="px-6 pt-6 pb-2 flex flex-col items-center text-center">
+        <div class="w-16 h-16 rounded-full flex items-center justify-center mb-4 bg-gradient-to-br from-red-100 to-pink-100 ring-4 ring-red-50">
+          <i data-lucide="log-out" class="w-8 h-8 text-red-500"></i>
+        </div>
+
+        <h3 class="text-xl font-bold text-slate-800 mb-2">Log Out?</h3>
+
+        <p class="text-sm text-slate-500 leading-relaxed">
+          You are about to log out of <span class="font-bold text-[#8B1E7E] break-words"><?= e($displayName) ?></span>.
+          Any unsaved changes will be lost.
+        </p>
+
+        <p class="text-xs text-slate-400 font-medium mt-3 flex items-center gap-1.5">
+          <i data-lucide="info" class="w-3.5 h-3.5"></i> You can log back in anytime.
+        </p>
+      </div>
+
+      <div class="px-6 py-5 mt-2 flex flex-col-reverse sm:flex-row gap-3">
+        <button type="button" onclick="closeLogoutModal()"
+                class="flex-1 px-5 py-3 rounded-xl font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-200 transition-all duration-200 active:scale-95">
+          Cancel
+        </button>
+        <button type="button" id="confirmLogoutBtn"
+                class="flex-1 px-5 py-3 rounded-xl font-bold text-white bg-gradient-to-r from-red-500 via-red-600 to-rose-600 hover:from-red-600 hover:via-red-700 hover:to-rose-700 shadow-lg shadow-red-500/30 hover:shadow-red-500/50 transition-all duration-300 hover:-translate-y-0.5 active:scale-95 flex items-center justify-center gap-2">
+          <i data-lucide="log-out" class="w-4 h-4"></i>
+          <span>Log Out</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
   <!-- HIDDEN DELETE FORM -->
   <form id="deleteForm" method="POST" action="classes.php" class="hidden">
     <input type="hidden" name="action" value="delete_class" />
@@ -847,12 +878,10 @@ if ($conn instanceof mysqli) {
       flashBoxes.forEach(function (box) {
         if (!box) return;
 
-        // After 3s, play the fade-out animation
         setTimeout(function () {
           box.classList.remove('animate-flash-in');
           box.classList.add('animate-flash-out');
 
-          // After the fade-out animation finishes, remove from DOM
           setTimeout(function () {
             if (box && box.parentNode) {
               box.parentNode.removeChild(box);
@@ -906,26 +935,6 @@ if ($conn instanceof mysqli) {
       });
     })();
 
-    // ---- Logout confirmation ----
-    (function () {
-      const logoutButtons = [
-        document.getElementById('sidebarLogoutBtn'),
-        document.getElementById('dropdownLogoutBtn'),
-      ];
-      logoutButtons.forEach(function (btn) {
-        if (!btn) return;
-        btn.addEventListener('click', function (e) {
-          const confirmed = window.confirm('Are you sure you want to log out?');
-          if (!confirmed) {
-            e.preventDefault();
-            e.stopPropagation();
-            return false;
-          }
-          btn.classList.add('opacity-50', 'pointer-events-none');
-        });
-      });
-    })();
-
     // ---- Class Modal ----
     const classModal      = document.getElementById('classModal');
     const classModalTitle = document.getElementById('classModalTitle');
@@ -974,7 +983,7 @@ if ($conn instanceof mysqli) {
       }
     });
 
-    // ---- Custom Delete Confirmation Modal ----
+    // ---- Delete Confirmation Modal ----
     const deleteConfirmModal   = document.getElementById('deleteConfirmModal');
     const deleteConfirmPanel   = document.getElementById('deleteConfirmPanel');
     const deleteClassNameEl    = document.getElementById('deleteClassNameDisplay');
@@ -994,10 +1003,9 @@ if ($conn instanceof mysqli) {
       deleteConfirmModal.classList.remove('hidden');
       document.body.classList.add('overflow-hidden');
 
-      // Slight shake for emphasis
       if (deleteConfirmPanel) {
         deleteConfirmPanel.classList.remove('animate-confirm-shake');
-        void deleteConfirmPanel.offsetWidth; // reflow to restart animation
+        void deleteConfirmPanel.offsetWidth;
         deleteConfirmPanel.classList.add('animate-confirm-shake');
       }
 
@@ -1039,6 +1047,55 @@ if ($conn instanceof mysqli) {
         closeDeleteModal();
       }
     });
+
+    // ---- Logout Confirmation Modal ----
+    (function () {
+      const logoutConfirmModal = document.getElementById('logoutConfirmModal');
+      const logoutConfirmPanel = document.getElementById('logoutConfirmPanel');
+      const confirmLogoutBtn   = document.getElementById('confirmLogoutBtn');
+      const LOGOUT_URL         = '../logout.php?role=admin';
+
+      if (!logoutConfirmModal) return;
+
+      window.openLogoutModal = function () {
+        logoutConfirmModal.classList.remove('hidden');
+        document.body.classList.add('overflow-hidden');
+        if (logoutConfirmPanel) {
+          logoutConfirmPanel.classList.remove('animate-confirm-shake');
+          void logoutConfirmPanel.offsetWidth;
+          logoutConfirmPanel.classList.add('animate-confirm-shake');
+        }
+        setTimeout(function () { if (confirmLogoutBtn) confirmLogoutBtn.focus(); }, 80);
+        if (typeof lucide !== 'undefined') lucide.createIcons();
+      };
+
+      window.closeLogoutModal = function () {
+        logoutConfirmModal.classList.add('hidden');
+        document.body.classList.remove('overflow-hidden');
+      };
+
+      [document.getElementById('sidebarLogoutBtn'), document.getElementById('dropdownLogoutBtn')].forEach(function (btn) {
+        if (!btn) return;
+        btn.addEventListener('click', function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          window.openLogoutModal();
+        });
+      });
+
+      if (confirmLogoutBtn) {
+        confirmLogoutBtn.addEventListener('click', function () {
+          confirmLogoutBtn.classList.add('opacity-50', 'pointer-events-none');
+          window.location.href = LOGOUT_URL;
+        });
+      }
+
+      document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape' && !logoutConfirmModal.classList.contains('hidden')) {
+          window.closeLogoutModal();
+        }
+      });
+    })();
   </script>
 
   <script src="../assets/js/index.js"></script>
